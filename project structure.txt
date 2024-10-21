@@ -1,0 +1,26 @@
+webapp/
+│
+├── backend/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+├── frontend/
+│   ├── public/
+│   │   └── index.html
+│   ├── src/
+│   │   ├── App.js
+│   │   ├── components/
+│   │   │   ├── ScatterPlot.js
+│   │   │   └── MapComponent.js
+│   │   │   └── LocationSelector.js
+│   │   └── index.js
+│   ├── package.json
+│   ├── .env  // <-- Place your .env file here
+│   └── Dockerfile
+│
+├── data/
+│   └── global_tsne_results.parquet
+│
+├── docker-compose.yml
+└── README.md
