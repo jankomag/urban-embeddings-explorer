@@ -3,3 +3,11 @@ frontend/.env
 frontend/node_modules/*
 .DS_Store
 frontend/package-lock.json
+Thumbs.db
+
+# Build outputs
+/build
+/dist
+
+# Log files
+*.log
