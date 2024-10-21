@@ -41,10 +41,7 @@ def load_embeddings(root_dir):
             geometries, dates)
 
 print("Loading embeddings...")
-embeddings, city_labels, country_labels, geometries, dates = load_embeddings("data/224_embeddings")
-
-# scaler = StandardScaler()
-# embeddings_scaled = scaler.fit_transform(embeddings)
+embeddings, city_labels, country_labels, geometries, dates = load_embeddings("224embeddings")
 
 print("Performing UMAP...")
 reducer = umap.UMAP(n_neighbors=6, min_dist=1, n_components=2, random_state=42)
