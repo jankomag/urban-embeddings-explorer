@@ -1,5 +1,5 @@
-# Use an official Node runtime as the parent image
-FROM node:14
+# Build stage
+FROM node:14 AS build
 
 # Set the working directory in the container
 WORKDIR /app
@@ -11,7 +11,7 @@ COPY package*.json ./
 RUN npm install
 
 # Install additional dependencies
-RUN npm install chart.js@3.9.1 chartjs-plugin-zoom@1.2.1 react-chartjs-2@4.3.1
+RUN npm install chart.js@3.9.1 chartjs-plugin-zoom@1.2.1 react-chartjs-2@4.3.1 @babel/plugin-proposal-private-property-in-object
 
 # Copy the current directory contents into the container
 COPY . .
@@ -19,8 +19,16 @@ COPY . .
 # Build the app
 RUN npm run build
 
-# Install serve to run the application
+# Production stage
+FROM node:14-alpine
+
+WORKDIR /app
+
+# Install serve
 RUN npm install -g serve
+
+# Copy build files from build stage
+COPY --from=build /app/build ./build
 
 # Make port 3000 available to the world outside this container
 EXPOSE 3000
