@@ -10,6 +10,9 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
+# Install additional dependencies
+RUN npm install chart.js@3.9.1 chartjs-plugin-zoom@1.2.1 react-chartjs-2@4.3.1
+
 # Copy the current directory contents into the container
 COPY . .
 
