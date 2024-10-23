@@ -28,8 +28,12 @@ app.add_middleware(
 
 # Global variable to store the data
 global_df = None
+urban_areas_gdf = None
 
 def format_country_name(name):
+    return name.replace(' ', '_').upper()
+
+def format_continent_name(name):
     return name.replace(' ', '_').upper()
 
 @lru_cache(maxsize=1)
@@ -40,26 +44,38 @@ def load_tsne_data():
             global_df = pd.read_parquet('../data/global_umap_results.parquet')
             # Convert centroid string to actual coordinates
             global_df[['longitude', 'latitude']] = global_df['centroid'].str.split(',', expand=True).astype(float)
-            # Format country names
+            # Format country and continent names
             global_df['country'] = global_df['country'].apply(format_country_name)
+            global_df['continent'] = global_df['continent'].apply(format_continent_name)
+            
+            # Make sure continent is not null
+            if global_df['continent'].isnull().any():
+                logger.warning("Some continent values are null!")
+            
+            # Log unique continents for debugging
+            unique_continents = global_df['continent'].unique()
+            logger.info(f"Unique continents in data: {unique_continents}")
+            
             # Pre-compute the dict representation for faster access
             global_df['dict_rep'] = global_df.apply(lambda row: {
                 'x': float(row['x']),
                 'y': float(row['y']),
                 'country': row['country'],
+                'continent': row['continent'],
                 'city': row['city'],
                 'longitude': float(row['longitude']),
                 'latitude': float(row['latitude'])
             }, axis=1).tolist()
             logger.info(f"Loaded {len(global_df)} data points")
+            
+            # Log a sample point for verification
+            sample_point = global_df['dict_rep'][0]
+            logger.info(f"Sample point data: {sample_point}")
+            
         except Exception as e:
             logger.error(f"Error loading data: {e}")
             raise HTTPException(status_code=500, detail="Error loading data")
     return global_df
-
-
-# Add this new global variable
-urban_areas_gdf = None
 
 @lru_cache(maxsize=1)
 def load_urban_areas():
@@ -83,10 +99,7 @@ async def startup_event():
 async def get_urban_areas():
     try:
         gdf = load_urban_areas()
-        
-        # Convert to GeoJSON
         geojson = gdf.to_crs(epsg=4326).to_json()
-        
         return JSONResponse(content=json.loads(geojson))
     except Exception as e:
         logger.error(f"Error in /urban_areas: {e}")
@@ -101,15 +114,11 @@ async def get_urban_area(city: str):
         if city_data.empty:
             raise HTTPException(status_code=404, detail="City not found")
         
-        # Convert to GeoJSON
         geojson = city_data.to_crs(epsg=4326).to_json()
-        
         return JSONResponse(content=json.loads(geojson))
     except Exception as e:
         logger.error(f"Error in /urban_area: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching urban area for {city}")
-
-
 
 @app.get("/tsne_data")
 async def get_tsne_data():
@@ -117,10 +126,17 @@ async def get_tsne_data():
         df = load_tsne_data()
         total_points = len(df)
         
-        # Use pre-computed dict representation for faster response
+        # Get the response data
         response_data = df['dict_rep'].tolist()
         
-        logger.info(f"Sending {total_points} data points")
+        # Log some sample data for verification
+        logger.info(f"Total points: {total_points}")
+        if response_data:
+            logger.info(f"Sample point continent: {response_data[0].get('continent', 'NO_CONTINENT')}")
+        
+        # Verify continent data
+        continents_present = set(d.get('continent') for d in response_data)
+        logger.info(f"Continents present in response: {continents_present}")
         
         return JSONResponse(content={
             'data': response_data,
@@ -150,7 +166,6 @@ async def get_cities(country: str) -> List[str]:
     except Exception as e:
         logger.error(f"Error in /cities: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching cities for {country}")
-
 
 @app.get("/clustered_map_data")
 async def get_clustered_map_data(
@@ -199,7 +214,6 @@ async def get_country_data(country: str):
         if country_df.empty:
             raise HTTPException(status_code=404, detail="Country not found")
         
-        # Use pre-computed dict representation for faster response
         response_data = country_df['dict_rep'].tolist()
         
         return JSONResponse(content=response_data)

@@ -21,18 +21,35 @@ ChartJS.register(
 );
 
 const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry, selectedCity }) => {
-  const [data, setData] = useState([]);
+  const [plotData, setPlotData] = useState([]);
   const [isFlashing, setIsFlashing] = useState(false);
+  const [plotDataRange, setPlotDataRange] = useState({
+    xMin: 0,
+    xMax: 0,
+    yMin: 0,
+    yMax: 0
+  });
   const canvasRef = useRef(null);
   const chartRef = useRef(null);
-  const countryColors = useRef({});
   const flashIntervalRef = useRef(null);
-  const [dataRange, setDataRange] = useState({ xMin: 0, xMax: 0, yMin: 0, yMax: 0 });
 
-  const formatCountryName = (name) => {
-    return name.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
-  };
 
+  const continentColors = useMemo(() => ({
+    'NORTH_AMERICA': 'rgba(255, 99, 132, 0.5)',    // Red
+    'SOUTH_AMERICA': 'rgba(54, 162, 235, 0.5)',    // Blue
+    'EUROPE': 'rgba(75, 192, 192, 0.5)',           // Teal
+    'AFRICA': 'rgba(255, 206, 86, 0.5)',           // Yellow
+    'ASIA': 'rgba(153, 102, 255, 0.5)',            // Purple
+    'AUSTRALIA': 'rgba(255, 159, 64, 0.5)'         // Orange (for Australia)
+  }), []);
+
+  const formatCountryName = useCallback((name) => {
+    return name.split('_').map(word =>
+      word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    ).join(' ');
+  }, []);
+
+  // Fetch data
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -41,24 +58,20 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const result = await response.json();
-        console.log(`Received ${result.data.length} data points`);
-        setData(result.data);
 
-        // Calculate data range
+        // Calculate data ranges
         const xValues = result.data.map(d => d.x);
         const yValues = result.data.map(d => d.y);
-        setDataRange({
+
+        setPlotDataRange({
           xMin: Math.min(...xValues),
           xMax: Math.max(...xValues),
           yMin: Math.min(...yValues),
           yMax: Math.max(...yValues)
         });
 
-        result.data.forEach(d => {
-          if (!countryColors.current[d.country]) {
-            countryColors.current[d.country] = `hsla(${Math.random() * 360}, 70%, 50%, 0.5)`;            
-          }
-        });
+        setPlotData(result.data);
+        console.log(`Loaded ${result.data.length} data points`);
       } catch (error) {
         console.error('Error fetching data:', error);
       }
@@ -67,28 +80,48 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
     fetchData();
   }, []);
 
-  const chartData = useMemo(() => {
-    console.log("Selected point in ScatterPlot:", selectedPoint);
-    const baseDataset = {
-      label: 'Base Points',
-      data: data.filter(d => {
-        if (selectedPoint) return d.x !== selectedPoint.x || d.y !== selectedPoint.y;
-        if (selectedCity) return d.city !== selectedCity;
-        return true;
-      }).map(d => ({
-        ...d,
-        country: formatCountryName(d.country)
-      })),
-      backgroundColor: data.map(d => countryColors.current[d.country] || 'rgba(128, 128, 128, 0.5)'),
-      borderColor: 'transparent',
-      borderWidth: 0,
-      pointRadius: 2,
-      pointHoverRadius: 4,
-    };
+  const isPointVisible = useCallback((point, chart) => {
+    if (!point || !chart?.scales?.x || !chart?.scales?.y) return false;
 
+    const xScale = chart.scales.x;
+    const yScale = chart.scales.y;
+
+    return point.x >= xScale.min &&
+      point.x <= xScale.max &&
+      point.y >= yScale.min &&
+      point.y <= yScale.max;
+  }, []);
+
+  const panToPoint = useCallback((point) => {
+    if (!chartRef.current || !point) return;
+
+    const chart = chartRef.current;
+    if (!isPointVisible(point, chart)) {
+      const xScale = chart.scales.x;
+      const yScale = chart.scales.y;
+
+      const xRange = xScale.max - xScale.min;
+      const yRange = yScale.max - yScale.min;
+
+      const targetX = point.x - xRange / 2;
+      const targetY = point.y - yRange / 2;
+
+      const deltaX = xScale.min - targetX;
+      const deltaY = yScale.min - targetY;
+
+      const pixelsX = deltaX * xScale.width / xRange;
+      const pixelsY = deltaY * yScale.height / yRange;
+
+      chart.pan({ x: pixelsX, y: pixelsY }, undefined, 'default');
+      chart.update('none');
+    }
+  }, [isPointVisible]);
+
+
+  const chartData = useMemo(() => {
     const highlightedDataset = {
-      label: 'Highlighted Points',
-      data: data.filter(d => {
+      label: 'Selected Points',
+      data: plotData.filter(d => {
         if (selectedPoint) return d.x === selectedPoint.x && d.y === selectedPoint.y;
         if (selectedCity) return d.city === selectedCity;
         return false;
@@ -96,38 +129,61 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
         ...d,
         country: formatCountryName(d.country)
       })),
-      backgroundColor: isFlashing ? 'rgba(255, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.6)',
+      backgroundColor: isFlashing ? 'rgba(255, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.8)',
       borderColor: 'black',
-      borderWidth: 1,
+      borderWidth: 2,
       pointRadius: 6,
-      pointHoverRadius: 6,
+      pointHoverRadius: 8,
+      order: 1
+    };
+
+    const baseDataset = {
+      label: 'All Points',
+      data: plotData.filter(d => {
+        if (selectedPoint) return d.x !== selectedPoint.x || d.y !== selectedPoint.y;
+        if (selectedCity) return d.city !== selectedCity;
+        return true;
+      }).map(d => ({
+        ...d,
+        country: formatCountryName(d.country)
+      })),
+      backgroundColor: plotData.map(d => {
+        // Map OCEANIA to AUSTRALIA for color lookup
+        const continentKey = d.continent === 'OCEANIA' ? 'AUSTRALIA' : d.continent;
+        return continentColors[continentKey] || 'rgba(128, 128, 128, 0.5)';
+      }),
+      borderColor: 'transparent',
+      borderWidth: 0,
+      pointRadius: 2,
+      pointHoverRadius: 4,
+      order: 2
     };
 
     return {
-      datasets: [baseDataset, highlightedDataset].reverse(),
+      datasets: [baseDataset, highlightedDataset],
     };
-  }, [data, selectedPoint, selectedCity, isFlashing]);
+  }, [plotData, selectedPoint, selectedCity, isFlashing, continentColors, formatCountryName]);
 
   const chartOptions = useMemo(() => {
-    const padding = 0.1; // 10% padding
-    const xRange = dataRange.xMax - dataRange.xMin;
-    const yRange = dataRange.yMax - dataRange.yMin;
+    const padding = 0.1;
+    const xRange = plotDataRange.xMax - plotDataRange.xMin;
+    const yRange = plotDataRange.yMax - plotDataRange.yMin;
     const xPadding = xRange * padding;
     const yPadding = yRange * padding;
 
     return {
       scales: {
-        x: { 
-          type: 'linear', 
+        x: {
+          type: 'linear',
           position: 'bottom',
-          min: dataRange.xMin - xPadding,
-          max: dataRange.xMax + xPadding,
+          min: plotDataRange.xMin - xPadding,
+          max: plotDataRange.xMax + xPadding,
         },
-        y: { 
-          type: 'linear', 
+        y: {
+          type: 'linear',
           position: 'left',
-          min: dataRange.yMin - yPadding,
-          max: dataRange.yMax + yPadding,
+          min: plotDataRange.yMin - yPadding,
+          max: plotDataRange.yMax + yPadding,
         }
       },
       plugins: {
@@ -138,13 +194,32 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
           callbacks: {
             label: (context) => {
               const point = context.raw;
-              return `Country: ${point.country}, City: ${point.city || 'N/A'}`;
+              return [
+                `Continent: ${point.continent.replace('_', ' ')}`,
+                `Country: ${point.country}`,
+                `City: ${point.city || 'N/A'}`
+              ];
             },
             title: () => null
           }
         },
         legend: {
-          display: false
+          display: true,
+          position: 'top',
+          align: 'center',
+          labels: {
+            padding: 30,
+            generateLabels: () => {
+              // Create legend entries for all continents except ANTARCTICA
+              return Object.entries(continentColors)
+                .map(([continent, color]) => ({
+                  text: continent.replace('_', ' '),
+                  fillStyle: color,
+                  strokeStyle: color,
+                  lineWidth: 0,
+                }));
+            }
+          }
         },
         zoom: {
           pan: {
@@ -161,10 +236,15 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
             mode: 'xy',
           },
           limits: {
-            x: {min: dataRange.xMin - xPadding, max: dataRange.xMax + xPadding},
-            y: {min: dataRange.yMin - yPadding, max: dataRange.yMax + yPadding}
+            x: { min: plotDataRange.xMin - xPadding, max: plotDataRange.xMax + xPadding },
+            y: { min: plotDataRange.yMin - yPadding, max: plotDataRange.yMax + yPadding }
           }
         }
+      },
+      interaction: {
+        mode: 'nearest',
+        intersect: true,
+        axis: 'xy'
       },
       animation: false,
       responsive: true,
@@ -172,33 +252,18 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
       onClick: (event, elements) => {
         if (elements.length > 0) {
           const index = elements[0].index;
-          const clickedPoint = data[index];
-          console.log("Scatter plot clicked, point:", clickedPoint);
+          const dataset = elements[0].datasetIndex;
+          const clickedPoint = chartData.datasets[dataset].data[index];
           onPointSelect(clickedPoint);
         }
       },
     };
-  }, [data, onPointSelect, dataRange]);
+  }, [plotDataRange, continentColors, chartData.datasets, onPointSelect]);
 
-  const centerOnPoint = useCallback((point) => {
-    if (chartRef.current) {
-      const chart = chartRef.current;
-      const xScale = chart.scales.x;
-      const yScale = chart.scales.y;
-      
-      const xCenter = (xScale.max + xScale.min) / 2;
-      const yCenter = (yScale.max + yScale.min) / 2;
-      
-      const xOffset = point.x - xCenter;
-      const yOffset = point.y - yCenter;
-      
-      chart.pan({x: -xOffset * xScale.width / (xScale.max - xScale.min), y: -yOffset * yScale.height / (yScale.max - yScale.min)}, undefined, 'default');
-      chart.update('none');
-    }
-  }, []);
 
+  // Initialize and update chart
   useEffect(() => {
-    if (data.length > 0 && canvasRef.current) {
+    if (plotData.length > 0 && canvasRef.current) {
       if (chartRef.current) {
         chartRef.current.destroy();
       }
@@ -209,26 +274,25 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
         data: chartData,
         options: chartOptions
       });
+
+      return () => {
+        if (chartRef.current) {
+          chartRef.current.destroy();
+        }
+      };
     }
+  }, [plotData, chartData, chartOptions]);
 
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy();
-      }
-    };
-  }, [data, chartData, chartOptions]);
-
+  // Handle selected point visibility
   useEffect(() => {
-    if (chartRef.current && selectedPoint) {
-      centerOnPoint(selectedPoint);
+    if (selectedPoint) {
+      panToPoint(selectedPoint);
     }
-  }, [selectedPoint, centerOnPoint]);
+  }, [selectedPoint, panToPoint]);
 
   const handleResetZoom = useCallback(() => {
     if (chartRef.current) {
       chartRef.current.resetZoom();
-      chartRef.current.update();
-      console.log("Zoom reset");
     }
   }, []);
 
@@ -241,11 +305,11 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
     flashIntervalRef.current = setInterval(() => {
       setIsFlashing(prev => !prev);
       flashCount++;
-      if (flashCount >= 4) { // Flash 5 times (10 state changes)
+      if (flashCount >= 6) {
         clearInterval(flashIntervalRef.current);
         setIsFlashing(false);
       }
-    }, 50); // Change every 50ms for a faster flash
+    }, 200);
   }, []);
 
   useEffect(() => {
@@ -258,9 +322,15 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
 
   return (
     <div style={{ height: '100%', width: '100%', position: 'relative' }}>
-      <canvas ref={canvasRef} style={{ height: '100%', width: '100%' }} />
-      <div style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 10 }}>
-        <button 
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        zIndex: 100,
+        display: 'flex',
+        gap: '10px'
+      }}>
+        <button
           onClick={handleResetZoom}
           style={{
             padding: '5px 10px',
@@ -270,13 +340,13 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
             borderRadius: '5px',
             cursor: 'pointer',
             fontSize: '12px',
-            marginRight: '10px'
+            boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
           }}
         >
           Reset Zoom
         </button>
         {(selectedPoint || selectedCity) && (
-          <button 
+          <button
             onClick={handleFlashPoints}
             style={{
               padding: '5px 10px',
@@ -285,13 +355,15 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
               border: 'none',
               borderRadius: '5px',
               cursor: 'pointer',
-              fontSize: '12px'
+              fontSize: '12px',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
             }}
           >
             Flash Selected Point(s)
           </button>
         )}
       </div>
+      <canvas ref={canvasRef} style={{ height: '100%', width: '100%' }} />
     </div>
   );
 });

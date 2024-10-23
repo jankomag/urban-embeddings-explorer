@@ -16,11 +16,13 @@ webapp/
 │   │   │   └── LocationSelector.js
 │   │   └── index.js
 │   ├── package.json
-│   ├── .env  // <-- Place your .env file here
+│   ├── .env
 │   └── Dockerfile
 │
 ├── data/
 │   └── global_tsne_results.parquet
 │
 ├── docker-compose.yml
-└── README.md
+├── README.md
+├── db_config.py
+└── preprocess_embeddings.py
