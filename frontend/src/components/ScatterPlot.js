@@ -20,7 +20,47 @@ ChartJS.register(
   zoomPlugin
 );
 
-const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry, selectedCity }) => {
+const LoadingOverlay = () => (
+  <div style={{
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10
+  }}>
+    <div style={{
+      width: '50px',
+      height: '50px',
+      border: '5px solid #f3f3f3',
+      borderTop: '5px solid #3498db',
+      borderRadius: '50%',
+      animation: 'spin 1s linear infinite',
+      marginBottom: '10px'
+    }} />
+    <div style={{
+      fontSize: '16px',
+      fontWeight: 'bold',
+      color: '#333'
+    }}>
+      Computing UMAP...
+    </div>
+  </div>
+);
+
+const ScatterPlot = React.memo(({ 
+  onPointSelect, 
+  selectedPoint, 
+  selectedCountry, 
+  selectedCity,
+  customData,
+  isLoading 
+}) => {
   const [plotData, setPlotData] = useState([]);
   const [isFlashing, setIsFlashing] = useState(false);
   const [plotDataRange, setPlotDataRange] = useState({
@@ -32,7 +72,7 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
   const canvasRef = useRef(null);
   const chartRef = useRef(null);
   const flashIntervalRef = useRef(null);
-
+  const containerRef = useRef(null);
 
   const continentColors = useMemo(() => ({
     'NORTH_AMERICA': 'rgba(255, 99, 132, 0.5)',    // Red
@@ -49,36 +89,85 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
     ).join(' ');
   }, []);
 
+  // Custom Legend Component
+  const CustomLegend = React.memo(() => (
+    <div style={{
+      position: 'absolute',
+      left: '10px',
+      bottom: '10px',
+      backgroundColor: 'rgba(255, 255, 255, 0.9)',
+      padding: '10px',
+      borderRadius: '8px',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '8px',
+      maxWidth: '100%',
+      zIndex: 1
+    }}>
+      {Object.entries(continentColors).map(([continent, color]) => (
+        <div key={continent} style={{
+          display: 'flex',
+          alignItems: 'center',
+          fontSize: '12px',
+          marginRight: '12px'
+        }}>
+          <div style={{
+            width: '12px',
+            height: '12px',
+            backgroundColor: color,
+            marginRight: '6px',
+            borderRadius: '3px'
+          }} />
+          <span>{continent.replace('_', ' ')}</span>
+        </div>
+      ))}
+    </div>
+  ));
+
+
   // Fetch data
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        const response = await fetch('http://localhost:8000/tsne_data');
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const result = await response.json();
-
-        // Calculate data ranges
-        const xValues = result.data.map(d => d.x);
-        const yValues = result.data.map(d => d.y);
-
+      if (customData) {
+        setPlotData(customData);
+        
+        const xValues = customData.map(d => d.x);
+        const yValues = customData.map(d => d.y);
+        
         setPlotDataRange({
           xMin: Math.min(...xValues),
           xMax: Math.max(...xValues),
           yMin: Math.min(...yValues),
           yMax: Math.max(...yValues)
         });
+      } else {
+        try {
+          const response = await fetch('http://localhost:8000/tsne_data');
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const result = await response.json();
 
-        setPlotData(result.data);
-        console.log(`Loaded ${result.data.length} data points`);
-      } catch (error) {
-        console.error('Error fetching data:', error);
+          const xValues = result.data.map(d => d.x);
+          const yValues = result.data.map(d => d.y);
+
+          setPlotDataRange({
+            xMin: Math.min(...xValues),
+            xMax: Math.max(...xValues),
+            yMin: Math.min(...yValues),
+            yMax: Math.max(...yValues)
+          });
+
+          setPlotData(result.data);
+        } catch (error) {
+          console.error('Error fetching data:', error);
+        }
       }
     };
 
     fetchData();
-  }, []);
+  }, [customData]);
 
   const isPointVisible = useCallback((point, chart) => {
     if (!point || !chart?.scales?.x || !chart?.scales?.y) return false;
@@ -117,7 +206,6 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
     }
   }, [isPointVisible]);
 
-
   const chartData = useMemo(() => {
     const highlightedDataset = {
       label: 'Selected Points',
@@ -148,7 +236,6 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
         country: formatCountryName(d.country)
       })),
       backgroundColor: plotData.map(d => {
-        // Map OCEANIA to AUSTRALIA for color lookup
         const continentKey = d.continent === 'OCEANIA' ? 'AUSTRALIA' : d.continent;
         return continentColors[continentKey] || 'rgba(128, 128, 128, 0.5)';
       }),
@@ -204,22 +291,7 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
           }
         },
         legend: {
-          display: true,
-          position: 'top',
-          align: 'center',
-          labels: {
-            padding: 30,
-            generateLabels: () => {
-              // Create legend entries for all continents except ANTARCTICA
-              return Object.entries(continentColors)
-                .map(([continent, color]) => ({
-                  text: continent.replace('_', ' '),
-                  fillStyle: color,
-                  strokeStyle: color,
-                  lineWidth: 0,
-                }));
-            }
-          }
+          display: false,
         },
         zoom: {
           pan: {
@@ -258,10 +330,8 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
         }
       },
     };
-  }, [plotDataRange, continentColors, chartData.datasets, onPointSelect]);
+  }, [plotDataRange, onPointSelect, chartData.datasets]);
 
-
-  // Initialize and update chart
   useEffect(() => {
     if (plotData.length > 0 && canvasRef.current) {
       if (chartRef.current) {
@@ -283,7 +353,6 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
     }
   }, [plotData, chartData, chartOptions]);
 
-  // Handle selected point visibility
   useEffect(() => {
     if (selectedPoint) {
       panToPoint(selectedPoint);
@@ -320,13 +389,47 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
     };
   }, []);
 
+  // Insert loading overlay styles at the top of the document
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
+
   return (
-    <div style={{ height: '100%', width: '100%', position: 'relative' }}>
+    <div style={{ 
+      height: '100%', 
+      width: '100%', 
+      position: 'relative',
+      boxSizing: 'border-box',
+      paddingBottom: '40px'
+    }} ref={containerRef}>
+      {isLoading && <LoadingOverlay />}
+      
+      <div style={{
+        position: 'absolute',
+        top: '40px',
+        left: '10px',
+        backgroundColor: 'rgba(255, 255, 255, 0.8)',
+        padding: '5px 10px',
+        borderRadius: '4px',
+        fontSize: '12px',
+        zIndex: 1
+      }}>
+        {customData ? 'Custom UMAP' : 'Pre-computed UMAP'}
+      </div>
+      
       <div style={{
         position: 'absolute',
         top: '10px',
         right: '10px',
-        zIndex: 100,
+        zIndex: 1,
         display: 'flex',
         gap: '10px'
       }}>
@@ -363,7 +466,16 @@ const ScatterPlot = React.memo(({ onPointSelect, selectedPoint, selectedCountry,
           </button>
         )}
       </div>
-      <canvas ref={canvasRef} style={{ height: '100%', width: '100%' }} />
+      
+      <div style={{ 
+        position: 'relative', 
+        height: '100%', 
+        width: '100%',
+        boxSizing: 'border-box'
+      }}>
+        <canvas ref={canvasRef} style={{ display: 'block', height: '100%', width: '100%' }} />
+        <CustomLegend />
+      </div>
     </div>
   );
 });

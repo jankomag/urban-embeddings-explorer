@@ -1,4 +1,3 @@
-version: '3'
 services:
   backend:
     build: ./backend
@@ -6,9 +5,22 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+    depends_on:
+      - redis
+
   frontend:
     build: ./frontend
     ports:
       - "3000:3000"
     depends_on:
       - backend
+
+  redis:
+    image: redis:6.2.6-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

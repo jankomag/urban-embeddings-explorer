@@ -10,6 +10,7 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
   const MAPBOX_TOKEN = process.env.REACT_APP_MAPBOX_TOKEN;
   const [hoverPoint, setHoverPoint] = useState(null);
   const [urbanAreasGeojson, setUrbanAreasGeojson] = useState(null);
+  const [loadError, setLoadError] = useState(null);
 
   const [viewState, setViewState] = useState({
     longitude: 0,
@@ -18,6 +19,32 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
     bearing: 0,
     pitch: 0
   });
+
+  useEffect(() => {
+    const fetchUrbanAreas = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/urban_areas');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        
+        // Validate GeoJSON structure
+        if (!data.type || !data.features) {
+          throw new Error('Invalid GeoJSON structure');
+        }
+        
+        setUrbanAreasGeojson(data);
+        setLoadError(null);
+      } catch (error) {
+        console.error('Error fetching urban areas:', error);
+        setLoadError(error.message);
+        setUrbanAreasGeojson(null);
+      }
+    };
+
+    fetchUrbanAreas();
+  }, []);
 
   useEffect(() => {
     // Fetch all urban areas on component mount
