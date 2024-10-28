@@ -1,19 +1,25 @@
+# main.py
 import os
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sklearn.cluster import DBSCAN
-from typing import List, Dict
+from typing import List
 import logging
 import json
-import uuid
-from datetime import timedelta
-import umap.umap_ as umap
-from collections import defaultdict
 from pathlib import Path
+from sqlalchemy import create_engine, text
+import sys
+
+# Add the path to the Clay model
+current_dir = os.getcwd()
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+print(parent_dir)
+
+from db_config import get_db_url
 
 # Set up logging
 logging.basicConfig(
@@ -33,9 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage for UMAP results
-umap_results = defaultdict(dict)
-
 # Global variables to store the data
 global_df = None
 urban_areas_gdf = None
@@ -48,15 +51,13 @@ def format_continent_name(name: str) -> str:
     """Format continent name to uppercase with underscores."""
     return name.replace(' ', '_').upper()
 
-
-
-def load_tsne_data():
-    """Load embeddings from parquet file."""
+def load_pca_data():
+    """Load pre-computed PCA visualization data."""
     global global_df
     if global_df is None:
         try:
             current_dir = Path(__file__).resolve().parent
-            data_path = current_dir.parent / 'data' / 'global_umap_results.parquet'
+            data_path = current_dir.parent / 'data' / 'global_pca_results.parquet'
             
             logger.info(f"Attempting to load data from: {data_path}")
             
@@ -72,26 +73,18 @@ def load_tsne_data():
             global_df['country'] = global_df['country'].apply(format_country_name)
             global_df['continent'] = global_df['continent'].apply(format_continent_name)
             
-            # Load original embeddings
-            embeddings_path = current_dir.parent / 'data' / 'original_embeddings.parquet'
-            if embeddings_path.exists():
-                embeddings_df = pd.read_parquet(embeddings_path)
-                embedding_columns = [col for col in embeddings_df.columns if col.startswith('dim_')]
-                global_df['original_embeddings'] = embeddings_df[embedding_columns].values.tolist()
-            else:
-                logger.warning("Original embeddings file not found")
-                global_df['original_embeddings'] = [[0] * 128] * len(global_df)  # placeholder
-            
             # Pre-compute the dict representation for faster access
+            # Note: Using only PC1 and PC2 for visualization
             global_df['dict_rep'] = global_df.apply(lambda row: {
-                'x': float(row['x']),
-                'y': float(row['y']),
+                'x': float(row['PC1']),  # Changed from 'x' to PC1
+                'y': float(row['PC2']),  # Changed from 'y' to PC2
                 'country': row['country'],
                 'continent': row['continent'],
                 'city': row['city'],
                 'longitude': float(row['longitude']),
                 'latitude': float(row['latitude']),
-                'original_embeddings': row['original_embeddings']
+                # Add all PCs to the response
+                'pcs': {f'PC{i}': float(row[f'PC{i}']) for i in range(1, 11)}
             }, axis=1).tolist()
             
             logger.info(f"Successfully loaded {len(global_df)} data points")
@@ -101,24 +94,11 @@ def load_tsne_data():
             raise HTTPException(status_code=500, detail=f"Error loading data: {str(e)}")
     return global_df
 
-@app.get("/embedding_dimensions")
-async def get_embedding_dimensions():
-    """Get the number of dimensions in the original embeddings."""
-    try:
-        df = load_tsne_data()
-        if len(df['original_embeddings'].iloc[0]) > 0:
-            return {"dimensions": len(df['original_embeddings'].iloc[0])}
-        else:
-            raise HTTPException(status_code=404, detail="No embedding dimensions found")
-    except Exception as e:
-        logger.error(f"Error in /embedding_dimensions: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching embedding dimensions")
-
 def load_urban_areas():
+    """Load urban areas GeoJSON data."""
     global urban_areas_gdf
     if urban_areas_gdf is None:
         try:
-            # Get the absolute path to the data directory
             current_dir = os.path.dirname(os.path.abspath(__file__))
             file_path = os.path.join(current_dir, '..', 'data', 'urban_areas.geojson')
             
@@ -135,90 +115,8 @@ def load_urban_areas():
 @app.on_event("startup")
 async def startup_event():
     """Initialize data on startup."""
-    load_tsne_data()
+    load_pca_data()
     load_urban_areas()
-
-async def compute_umap(computation_id: str, params: Dict):
-    """Compute UMAP transformation with given parameters."""
-    try:
-        # Load the original data
-        df = load_tsne_data()
-        logger.info("Data loaded for UMAP computation")
-        
-        # Get coordinates for UMAP input
-        coords = df[['x', 'y']].values
-        logger.info(f"Input shape for UMAP: {coords.shape}")
-        
-        # Configure UMAP
-        reducer = umap.UMAP(
-            n_neighbors=params['n_neighbors'],
-            min_dist=params['min_dist'],
-            n_components=2,
-            random_state=42
-        )
-        
-        # Compute UMAP
-        logger.info(f"Starting UMAP computation with params: {params}")
-        reduced_embeddings = reducer.fit_transform(coords)
-        logger.info(f"UMAP computation completed, output shape: {reduced_embeddings.shape}")
-        
-        # Store results in memory
-        result_dict = {
-            'status': 'completed',
-            'data': reduced_embeddings.tolist(),
-            'params': params
-        }
-        umap_results[computation_id] = result_dict
-        logger.info(f"Results stored for {computation_id}")
-        
-    except Exception as e:
-        logger.error(f"Error in UMAP computation: {str(e)}")
-        umap_results[computation_id] = {
-            'status': 'failed',
-            'error': str(e),
-            'params': params
-        }
-
-@app.post("/compute_umap")
-async def request_umap_computation(
-    background_tasks: BackgroundTasks,
-    n_neighbors: int = Query(..., ge=2, le=100),
-    min_dist: float = Query(..., ge=0.0, le=1.0)
-):
-    """Initiate UMAP computation with specified parameters."""
-    try:
-        params = {
-            'n_neighbors': n_neighbors,
-            'min_dist': min_dist
-        }
-        
-        computation_id = str(uuid.uuid4())
-        umap_results[computation_id] = {'status': 'pending', 'params': params}
-        
-        background_tasks.add_task(
-            compute_umap,
-            computation_id,
-            params
-        )
-        
-        return {"computation_id": computation_id}
-        
-    except Exception as e:
-        logger.error(f"Error initiating UMAP computation: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/umap_status/{computation_id}")
-async def get_umap_status(computation_id: str):
-    """Get status of a UMAP computation."""
-    try:
-        result = umap_results.get(computation_id)
-        if not result:
-            raise HTTPException(status_code=404, detail="Computation not found")
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error fetching UMAP status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/urban_areas")
 async def get_urban_areas():
@@ -255,24 +153,21 @@ async def get_urban_area(city: str):
         logger.error(f"Error in /urban_area: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching urban area for {city}")
 
-@app.get("/tsne_data")
-async def get_tsne_data():
-    """Get all TSNE/UMAP data points."""
+@app.get("/pca_data")
+async def get_pca_data():
+    """Get all PCA data points."""
     try:
-        df = load_tsne_data()
-        return JSONResponse(content={
-            'data': df['dict_rep'].tolist(),
-            'total_points': len(df)
-        })
+        df = load_pca_data()
+        return {"data": df['dict_rep'].tolist()}
     except Exception as e:
-        logger.error(f"Error in /tsne_data: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching t-SNE data")
+        logger.error(f"Error in /pca_data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/countries")
 async def get_countries() -> List[str]:
     """Get list of all countries."""
     try:
-        df = load_tsne_data()
+        df = load_pca_data()
         return sorted(df['country'].unique().tolist())
     except Exception as e:
         logger.error(f"Error in /countries: {e}")
@@ -282,7 +177,7 @@ async def get_countries() -> List[str]:
 async def get_cities(country: str) -> List[str]:
     """Get list of cities for a specific country."""
     try:
-        df = load_tsne_data()
+        df = load_pca_data()
         cities = sorted(df[df['country'] == country]['city'].unique().tolist())
         if not cities:
             raise HTTPException(status_code=404, detail="Country not found")
@@ -294,7 +189,7 @@ async def get_cities(country: str) -> List[str]:
 @app.get("/")
 async def read_root():
     """Root endpoint."""
-    return {"message": "Welcome to the Embeddings Viewer API!"}
+    return {"message": "Welcome to the PCA Urban Embeddings Viewer API!"}
 
 if __name__ == "__main__":
     import uvicorn

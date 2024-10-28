@@ -8,6 +8,6 @@ Thumbs.db
 # Build outputs
 /build
 /dist
-
+frontend/src/Appfull.js
 # Log files
 *.log

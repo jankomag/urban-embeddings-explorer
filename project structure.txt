@@ -1,28 +1,33 @@
 webapp/
-│
-├── backend/
-│   ├── main.py
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── frontend/
-│   ├── public/
-│   │   └── index.html
-│   ├── src/
-│   │   ├── App.js
-│   │   ├── components/
-│   │   │   ├── ScatterPlot.js
-│   │   │   └── MapComponent.js
-│   │   │   └── LocationSelector.js
-│   │   └── index.js
-│   ├── package.json
-│   ├── .env
-│   └── Dockerfile
-│
-├── data/
-│   └── global_tsne_results.parquet
-│
-├── docker-compose.yml
 ├── README.md
-├── db_config.py
-└── preprocess_embeddings.py
+├── docker-compose.yml
+├── backend/
+│   ├── Dockerfile
+│   ├── main.py
+│   └── requirements.txt
+├── data/
+│   ├── global_umap_results.parquet
+│   └── urban_areas.geojson
+└── frontend/
+    ├── Dockerfile
+    ├── package.json
+    ├── tailwind.config.js
+    ├── postcss.config.js
+    ├── public/
+    │   └── index.html
+    └── src/
+        ├── App.js
+        ├── index.js
+        ├── globals.css
+        ├── lib/
+        │   └── utils.js
+        └── components/
+            ├── LocationSelector.js
+            ├── CustomUMAPControls.js
+            ├── MapboxMapComponent.js
+            ├── ScatterPlot.js
+            └── ui/
+                ├── button.jsx        # Note the .jsx extension
+                ├── card.jsx
+                ├── select.jsx
+                └── separator.jsx

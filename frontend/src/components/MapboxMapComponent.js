@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import Map, { Source, Layer, NavigationControl, FullscreenControl, ScaleControl } from 'react-map-gl';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import Map, { Source, Layer, NavigationControl, FullscreenControl, ScaleControl, Marker } from 'react-map-gl';
 import bbox from '@turf/bbox';
 import bboxPolygon from '@turf/bbox-polygon';
 import buffer from '@turf/buffer';
@@ -14,10 +14,8 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
 
   const [viewState, setViewState] = useState({
     longitude: 0,
-    latitude: 0,
-    zoom: 1,
-    bearing: 0,
-    pitch: 0
+    latitude: 20,
+    zoom: 1.5
   });
 
   useEffect(() => {
@@ -165,8 +163,10 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
       }
     });
 
-    if (nearestPoint) {
+    // Only trigger if we found a point and it's within a reasonable distance
+    if (nearestPoint && minDistance < 2) { // Increased threshold for easier selection
       console.log("Map clicked, nearest point:", nearestPoint);
+      // Pass the complete point data
       onMapClick(nearestPoint);
     }
   };

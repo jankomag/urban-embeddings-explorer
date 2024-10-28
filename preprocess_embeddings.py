@@ -1,3 +1,5 @@
+# preprocess_embeddings.py
+import sys
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -7,6 +9,9 @@ from shapely import wkb
 from shapely.geometry import Point
 import umap
 from tqdm import tqdm
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import os
 from db_config import get_db_url
 
 def load_embeddings_from_db():
@@ -43,7 +48,7 @@ def load_embeddings_from_db():
             embeddings = []
             city_labels = []
             country_labels = []
-            continent_labels = []  # New list for continents
+            continent_labels = []
             geometries = []
             dates = []
             
@@ -104,36 +109,45 @@ def main():
     print("Loading embeddings from database...")
     embeddings, city_labels, country_labels, continent_labels, geometries, dates = load_embeddings_from_db()
 
-    print("Performing UMAP...")
-    reducer = umap.UMAP(n_neighbors=6, min_dist=1, n_components=2, random_state=42)
-    reduced_embeddings = reducer.fit_transform(embeddings)
+    print("Performing PCA...")
+    # Standardize the embeddings first
+    scaler = StandardScaler()
+    embeddings_scaled = scaler.fit_transform(embeddings)
+    
+    # Apply PCA with 10 components
+    n_components = 10
+    pca = PCA(n_components=n_components, random_state=42)
+    reduced_embeddings = pca.fit_transform(embeddings_scaled)
 
-    # Reduce precision of UMAP results
-    embeddings_2d = np.round(reduced_embeddings, decimals=5)
+    # Reduce precision of PCA results
+    embeddings_nd = np.round(reduced_embeddings, decimals=5)
+
+    print(f"Explained variance ratios: {pca.explained_variance_ratio_}")
 
     print("Creating DataFrame...")
+    # Create columns for all PCs
+    pc_columns = {f'PC{i+1}': embeddings_nd[:, i] for i in range(n_components)}
+    
     df = pd.DataFrame({
-        'x': embeddings_2d[:, 0],
-        'y': embeddings_2d[:, 1],
+        **pc_columns,  # Unpack all PC columns
         'centroid': [f"{geom.x},{geom.y}" for geom in geometries],
-        'continent': continent_labels,  # Add continent to DataFrame
+        'continent': continent_labels,
         'country': country_labels,
         'city': city_labels,
         'date': dates
     })
 
     print("Saving results...")
-    import os
     os.makedirs('data', exist_ok=True)
     
-    output_path = 'data/global_umap_results.parquet'
+    output_path = 'data/global_pca_results.parquet'
     df.to_parquet(output_path, compression='snappy', index=False)
     print(f"Results saved to {output_path}")
 
     # Print debug information
     print(f"\nSummary Statistics:")
     print(f"Total number of data points: {len(df)}")
-    print(f"Number of unique continents: {df['continent'].nunique()}")  # Add continent stats
+    print(f"Number of unique continents: {df['continent'].nunique()}")
     print(f"Number of unique countries: {df['country'].nunique()}")
     print(f"Number of unique cities: {df['city'].nunique()}")
     print(f"\nSample of processed data:")
