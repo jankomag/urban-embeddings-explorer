@@ -7,10 +7,10 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies with specific flags for production
-RUN npm ci --only=production
+# Install dependencies
+RUN npm install --production=false
 
-# Install additional dependencies
+# Install additional dependencies (if still needed)
 RUN npm install chart.js@3.9.1 chartjs-plugin-zoom@1.2.1 react-chartjs-2@4.3.1 @babel/plugin-proposal-private-property-in-object
 
 # Copy source code
