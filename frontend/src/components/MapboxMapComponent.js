@@ -27,7 +27,6 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
         }
         const data = await response.json();
         
-        // Validate GeoJSON structure
         if (!data.type || !data.features) {
           throw new Error('Invalid GeoJSON structure');
         }
@@ -45,22 +44,11 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
   }, []);
 
   useEffect(() => {
-    // Fetch all urban areas on component mount
-    fetch('http://localhost:8000/urban_areas')
-      .then(response => response.json())
-      .then(data => {
-        setUrbanAreasGeojson(data);
-      })
-      .catch(error => console.error('Error fetching urban areas:', error));
-  }, []);
-
-  useEffect(() => {
     if (selectedPoint) {
       setViewState(prevViewState => ({
         ...prevViewState,
         longitude: selectedPoint.longitude,
         latitude: selectedPoint.latitude,
-        // Keep the current zoom level
         transitionDuration: 1000
       }));
     }
@@ -77,7 +65,7 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
           ...prevViewState,
           longitude: (minLng + maxLng) / 2,
           latitude: (minLat + maxLat) / 2,
-          zoom: 10, // We'll keep zooming to the city when a city is selected
+          zoom: 10,
           transitionDuration: 1000
         }));
       }
@@ -88,7 +76,7 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
     if (!selectedPoint) return null;
 
     const center = point([selectedPoint.longitude, selectedPoint.latitude]);
-    const boxSize = 2.24; // 2240 meters in kilometers
+    const boxSize = 2.24;
     const options = { units: 'kilometers' };
     
     const bboxExtent = bbox(buffer(center, boxSize / 2, options));
@@ -99,7 +87,7 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
     if (!hoverPoint) return null;
 
     const center = point([hoverPoint.longitude, hoverPoint.latitude]);
-    const boxSize = 2.24; // 2240 meters in kilometers
+    const boxSize = 2.24;
     const options = { units: 'kilometers' };
     
     const bboxExtent = bbox(buffer(center, boxSize / 2, options));
@@ -145,8 +133,9 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
     }
   };
 
-  const handleClick = (event) => {
+  const handleClick = useCallback((event) => {
     const { lngLat } = event;
+    if (!allPoints?.length) return;
     
     // Find the nearest point
     let nearestPoint = null;
@@ -164,17 +153,15 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
     });
 
     // Only trigger if we found a point and it's within a reasonable distance
-    if (nearestPoint && minDistance < 2) { // Increased threshold for easier selection
-      console.log("Map clicked, nearest point:", nearestPoint);
-      // Pass the complete point data
+    if (nearestPoint && minDistance < 2) {
       onMapClick(nearestPoint);
     }
-  };
+  }, [allPoints, onMapClick]);
 
-  const handleHover = (event) => {
+  const handleHover = useCallback((event) => {
     const { lngLat } = event;
+    if (!allPoints?.length) return;
     
-    // Find the nearest point
     let nearestPoint = null;
     let minDistance = Infinity;
 
@@ -189,14 +176,16 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
       }
     });
 
-    if (nearestPoint) {
+    if (nearestPoint && minDistance < 2) {
       setHoverPoint(nearestPoint);
+    } else {
+      setHoverPoint(null);
     }
-  };
+  }, [allPoints]);
 
-  const handleMouseLeave = () => {
+  const handleMouseLeave = useCallback(() => {
     setHoverPoint(null);
-  };
+  }, []);
 
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%' }}>
@@ -244,6 +233,7 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
           </Source>
         )}
       </Map>
+      
       {selectedPoint && (
         <div style={{
           position: 'absolute',

@@ -1,44 +1,38 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Button } from "./components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "./components/ui/card";
-import { Separator } from "./components/ui/separator";
+import { Card, CardHeader, CardTitle, CardContent } from './components/ui/card';
+import LocationSelector from './components/LocationSelector';
+import PCSelector from './components/PCSelector';
 import { MapPin } from 'lucide-react';
 import ScatterPlot from './components/ScatterPlot';
 import MapboxMapComponent from './components/MapboxMapComponent';
-import LocationSelector from './components/LocationSelector';
-import PCSelector from './components/PCSelector';
 
 const App = () => {
-  const [selectedPoint, setSelectedPoint] = useState(null);
   const [selectedCountry, setSelectedCountry] = useState('');
   const [selectedCity, setSelectedCity] = useState('');
-  const [allPoints, setAllPoints] = useState([]);
-  const [isControlsCollapsed, setIsControlsCollapsed] = useState(false);
-  const [scatterPlotZoom, setScatterPlotZoom] = useState(null);
   const [selectedPCX, setSelectedPCX] = useState(1);
   const [selectedPCY, setSelectedPCY] = useState(2);
+  const [selectedPoint, setSelectedPoint] = useState(null);
+  const [allPoints, setAllPoints] = useState([]);
 
+  // Fetch all points data when component mounts
   useEffect(() => {
-    const fetchAllPoints = async () => {
+    const fetchPoints = async () => {
       try {
         const response = await fetch('http://localhost:8000/pca_data');
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const result = await response.json();
         setAllPoints(result.data);
       } catch (error) {
-        console.error('Error fetching all points data:', error);
+        console.error('Error fetching points:', error);
       }
     };
-    fetchAllPoints();
+    fetchPoints();
   }, []);
 
   const handlePointSelect = useCallback((point) => {
-    if (!point) return;
-    
-    console.log("Selected point:", point); // For debugging
     setSelectedPoint(point);
     setSelectedCountry(point.country);
-    setSelectedCity(point.city || '');
+    setSelectedCity(point.city);
   }, []);
 
   const handleLocationSelect = useCallback((country, city) => {
@@ -46,16 +40,6 @@ const App = () => {
     setSelectedCity(city);
     setSelectedPoint(null);
   }, []);
-
-  const handleZoomChange = useCallback((zoomState) => {
-    setScatterPlotZoom(zoomState);
-  }, []);
-
-  const handleMapClick = useCallback((point) => {
-    if (!point) return;
-    console.log("Map click point:", point); // For debugging
-    handlePointSelect(point);
-  }, [handlePointSelect]);
 
   const handlePCChange = useCallback((axis, value) => {
     if (axis === 'x') {
@@ -66,89 +50,72 @@ const App = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-2xl font-bold">
-            Global Urban Embeddings Explorer
-          </CardTitle>
-        </CardHeader>
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-lg">Controls</CardTitle>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsControlsCollapsed(!isControlsCollapsed)}
-              >
-                {isControlsCollapsed ? 'Expand' : 'Collapse'}
-              </Button>
-            </CardHeader>
-            <CardContent className={`space-y-4 transition-all duration-300 ${isControlsCollapsed ? 'hidden' : ''}`}>
-              <LocationSelector onSelect={handleLocationSelect} />
-              <Separator className="my-4" />
-              <PCSelector 
-                selectedX={selectedPCX}
-                selectedY={selectedPCY}
-                onChange={handlePCChange}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Selection Info */}
-          {(selectedCountry || selectedCity || selectedPoint) && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Selected Location</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center space-x-2">
+    <div className="flex flex-col h-screen bg-gray-50">
+      {/* Header Section */}
+      <div className="p-4">
+        <Card className="mb-4">
+          <CardHeader>
+            <div className="flex flex-row items-center justify-between mb-4">
+              <CardTitle className="text-2xl font-bold">
+                Global Urban Embeddings Explorer
+              </CardTitle>
+              {(selectedCountry || selectedCity || selectedPoint) && (
+                <div className="flex items-center space-x-2 bg-white px-4 py-2 rounded-lg shadow-sm border">
                   <MapPin className="h-4 w-4 text-blue-500" />
                   <span className="font-medium">
                     {selectedCountry}
                     {selectedCity && `, ${selectedCity}`}
-                    {selectedPoint && !selectedCity && `, ${selectedPoint.city}`}
                   </span>
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              )}
+            </div>
 
-          {/* Map Component */}
-          <Card className={`transition-all duration-300 ${isControlsCollapsed ? 'h-[calc(100vh-16rem)]' : 'h-[500px]'}`}>
+            <div className="flex flex-row items-center justify-between space-x-4">
+              <div className="min-w-[300px]">
+                <LocationSelector onSelect={handleLocationSelect} />
+              </div>
+              <div className="flex items-center space-x-4">
+                <span className="text-sm font-medium">Plot Controls:</span>
+                <PCSelector 
+                  selectedX={selectedPCX}
+                  selectedY={selectedPCY}
+                  onChange={handlePCChange}
+                />
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 min-h-0 p-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-full">
+          {/* ScatterPlot Card */}
+          <Card className="h-full overflow-hidden">
             <CardContent className="p-0 h-full">
-              <MapboxMapComponent
+              <ScatterPlot 
+                onPointSelect={handlePointSelect}
+                selectedPoint={selectedPoint} 
+                selectedCountry={selectedCountry} 
+                selectedCity={selectedCity} 
+                selectedPCX={selectedPCX} 
+                selectedPCY={selectedPCY} 
+              />
+            </CardContent>
+          </Card>
+
+          {/* Map Card */}
+          <Card className="h-full overflow-hidden">
+            <CardContent className="p-0 h-full">
+              <MapboxMapComponent 
                 selectedPoint={selectedPoint}
-                onMapClick={handleMapClick}
+                onMapClick={handlePointSelect}
                 allPoints={allPoints}
                 selectedCity={selectedCity}
               />
             </CardContent>
           </Card>
         </div>
-
-        {/* Scatter Plot */}
-        <Card className="h-[calc(100vh-8rem)]">
-          <CardHeader>
-            <CardTitle className="text-lg">PCA Visualization</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0 h-[calc(100%-5rem)]">
-            <ScatterPlot
-              onPointSelect={handlePointSelect}
-              selectedPoint={selectedPoint}
-              selectedCountry={selectedCountry}
-              selectedCity={selectedCity}
-              onZoomChange={handleZoomChange}
-              currentZoom={scatterPlotZoom}
-              selectedPCX={selectedPCX}
-              selectedPCY={selectedPCY}
-            />
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

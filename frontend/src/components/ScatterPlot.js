@@ -20,28 +20,15 @@ ChartJS.register(
   zoomPlugin
 );
 
-// Define getPointColor outside the component
-const getPointColor = (continent) => {
-  const colorMap = {
-    'North_America': 'rgba(255, 99, 132, 0.6)',
-    'South_America': 'rgba(54, 162, 235, 0.6)',
-    'Europe': 'rgba(255, 206, 86, 0.6)',
-    'Africa': 'rgba(75, 192, 192, 0.6)',
-    'Asia': 'rgba(153, 102, 255, 0.6)',
-    'Oceania': 'rgba(255, 159, 64, 0.6)'
-  };
-  return colorMap[continent] || 'rgba(128, 128, 128, 0.6)';
-};
-
 const ScatterPlot = React.memo(({ 
   onPointSelect, 
   selectedPoint, 
   selectedCountry, 
   selectedCity,
-  onZoomChange,
-  currentZoom,
   selectedPCX = 1,
-  selectedPCY = 2
+  selectedPCY = 2,
+  customData = null,
+  isLoading = false
 }) => {
   const [plotData, setPlotData] = useState([]);
   const [isFlashing, setIsFlashing] = useState(false);
@@ -51,10 +38,10 @@ const ScatterPlot = React.memo(({
     yMin: 0,
     yMax: 0
   });
-  const canvasRef = useRef(null);
   const chartRef = useRef(null);
-  const flashIntervalRef = useRef(null);
+  const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const flashIntervalRef = useRef(null);
 
   const continentColors = useMemo(() => ({
     'NORTH_AMERICA': 'rgba(255, 99, 132, 0.4)',    // Red
@@ -62,7 +49,7 @@ const ScatterPlot = React.memo(({
     'EUROPE': 'rgba(75, 192, 192, 0.4)',           // Teal
     'AFRICA': 'rgba(255, 206, 86, 0.4)',           // Yellow
     'ASIA': 'rgba(153, 102, 255, 0.4)',            // Purple
-    'AUSTRALIA': 'rgba(255, 159, 64, 0.4)'         // Orange
+    'OCEANIA': 'rgba(255, 159, 64, 0.4)'           // Orange
   }), []);
 
   const formatCountryName = useCallback((name) => {
@@ -71,53 +58,13 @@ const ScatterPlot = React.memo(({
     ).join(' ');
   }, []);
 
-  // Custom Legend Component
-  const CustomLegend = React.memo(() => (
-    <div style={{
-      position: 'absolute',
-      left: '10px',
-      bottom: '10px',
-      backgroundColor: 'rgba(255, 255, 255, 0.9)',
-      padding: '10px',
-      borderRadius: '8px',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: '8px',
-      maxWidth: '100%',
-      zIndex: 1
-    }}>
-      {Object.entries(continentColors).map(([continent, color]) => (
-        <div key={continent} style={{
-          display: 'flex',
-          alignItems: 'center',
-          fontSize: '12px',
-          marginRight: '12px'
-        }}>
-          <div style={{
-            width: '12px',
-            height: '12px',
-            backgroundColor: color,
-            marginRight: '6px',
-            borderRadius: '3px'
-          }} />
-          <span>{continent.replace('_', ' ')}</span>
-        </div>
-      ))}
-    </div>
-  ));
-
-  // Fetch data
   useEffect(() => {
     const fetchData = async () => {
       try {
         const response = await fetch('http://localhost:8000/pca_data');
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const result = await response.json();
 
-        // Transform the data to include x and y coordinates
         const transformedData = result.data.map(point => ({
           ...point,
           x: point.pcs[`PC${selectedPCX}`],
@@ -140,25 +87,50 @@ const ScatterPlot = React.memo(({
       }
     };
 
-    fetchData();
-  }, [selectedPCX, selectedPCY]);
+    if (!customData) {
+      fetchData();
+    }
+  }, [selectedPCX, selectedPCY, customData]);
+
+  useEffect(() => {
+    if (customData) {
+      const xValues = customData.map(d => d.x);
+      const yValues = customData.map(d => d.y);
+      
+      setPlotDataRange({
+        xMin: Math.min(...xValues),
+        xMax: Math.max(...xValues),
+        yMin: Math.min(...yValues),
+        yMax: Math.max(...yValues)
+      });
+      
+      setPlotData(customData);
+    }
+  }, [customData]);
+
+  const pcOptions = [
+    { pc: 1, variance: 32.5 },
+    { pc: 2, variance: 51.8 },
+    { pc: 3, variance: 65.4 },
+    { pc: 4, variance: 74.2 },
+    { pc: 5, variance: 81.7 },
+    { pc: 6, variance: 87.3 }
+  ];
 
   const chartData = useMemo(() => {
     const highlightedDataset = {
       label: 'Selected Points',
       data: plotData.filter(d => {
-        if (selectedPoint) return d.pcs[`PC${selectedPCX}`] === selectedPoint.pcs[`PC${selectedPCX}`] && 
-                              d.pcs[`PC${selectedPCY}`] === selectedPoint.pcs[`PC${selectedPCY}`];
+        if (selectedPoint) {
+          return d.pcs[`PC${selectedPCX}`] === selectedPoint.pcs[`PC${selectedPCX}`] && 
+                 d.pcs[`PC${selectedPCY}`] === selectedPoint.pcs[`PC${selectedPCY}`];
+        }
         if (selectedCity) return d.city === selectedCity;
+        if (selectedCountry) return d.country === selectedCountry;
         return false;
-      }).map(d => ({
-        ...d,
-        x: d.pcs[`PC${selectedPCX}`],
-        y: d.pcs[`PC${selectedPCY}`],
-        country: formatCountryName(d.country)
-      })),
+      }),
       backgroundColor: isFlashing ? 'rgba(255, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.8)',
-      borderColor: 'black',
+      borderColor: 'rgba(0, 0, 0, 0.8)',
       borderWidth: 2,
       pointRadius: 6,
       pointHoverRadius: 8,
@@ -168,20 +140,15 @@ const ScatterPlot = React.memo(({
     const baseDataset = {
       label: 'All Points',
       data: plotData.filter(d => {
-        if (selectedPoint) return d.pcs[`PC${selectedPCX}`] !== selectedPoint.pcs[`PC${selectedPCX}`] || 
-                              d.pcs[`PC${selectedPCY}`] !== selectedPoint.pcs[`PC${selectedPCY}`];
+        if (selectedPoint) {
+          return d.pcs[`PC${selectedPCX}`] !== selectedPoint.pcs[`PC${selectedPCX}`] || 
+                 d.pcs[`PC${selectedPCY}`] !== selectedPoint.pcs[`PC${selectedPCY}`];
+        }
         if (selectedCity) return d.city !== selectedCity;
+        if (selectedCountry) return d.country !== selectedCountry;
         return true;
-      }).map(d => ({
-        ...d,
-        x: d.pcs[`PC${selectedPCX}`],
-        y: d.pcs[`PC${selectedPCY}`],
-        country: formatCountryName(d.country)
-      })),
-      backgroundColor: plotData.map(d => {
-        const continentKey = d.continent === 'OCEANIA' ? 'AUSTRALIA' : d.continent;
-        return continentColors[continentKey] || 'rgba(128, 128, 128, 0.5)';
       }),
+      backgroundColor: plotData.map(d => continentColors[d.continent] || 'rgba(128, 128, 128, 0.4)'),
       borderColor: 'transparent',
       borderWidth: 0,
       pointRadius: 3,
@@ -190,9 +157,9 @@ const ScatterPlot = React.memo(({
     };
 
     return {
-      datasets: [baseDataset, highlightedDataset],
+      datasets: [baseDataset, highlightedDataset]
     };
-  }, [plotData, selectedPoint, selectedCity, isFlashing, continentColors, formatCountryName, selectedPCX, selectedPCY]);
+  }, [plotData, selectedPoint, selectedCity, selectedCountry, isFlashing, continentColors, selectedPCX, selectedPCY]);
 
   const chartOptions = useMemo(() => {
     const padding = 0.1;
@@ -202,6 +169,8 @@ const ScatterPlot = React.memo(({
     const yPadding = yRange * padding;
 
     return {
+      maintainAspectRatio: false,
+      responsive: true,
       scales: {
         x: {
           type: 'linear',
@@ -210,10 +179,8 @@ const ScatterPlot = React.memo(({
           max: plotDataRange.xMax + xPadding,
           title: {
             display: true,
-            text: `Principal Component ${selectedPCX}`,
-            font: {
-              size: 14
-            }
+            text: `PC${selectedPCX} (${pcOptions.find(p => p.pc === selectedPCX)?.variance.toFixed(1)}% var)`,
+            font: { size: 14 }
           }
         },
         y: {
@@ -223,10 +190,8 @@ const ScatterPlot = React.memo(({
           max: plotDataRange.yMax + yPadding,
           title: {
             display: true,
-            text: `Principal Component ${selectedPCY}`,
-            font: {
-              size: 14
-            }
+            text: `PC${selectedPCY} (${pcOptions.find(p => p.pc === selectedPCY)?.variance.toFixed(1)}% var)`,
+            font: { size: 14 }
           }
         }
       },
@@ -240,15 +205,23 @@ const ScatterPlot = React.memo(({
               const point = context.raw;
               return [
                 `Continent: ${point.continent.replace('_', ' ')}`,
-                `Country: ${point.country}`,
-                `City: ${point.city || 'N/A'}`
+                `Country: ${formatCountryName(point.country)}`,
+                `City: ${point.city}`
               ];
             },
             title: () => null
           }
         },
         legend: {
-          display: false,
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: {
+            boxWidth: 10,
+            padding: 10,
+            usePointStyle: true,
+            pointStyle: 'circle'
+          }
         },
         zoom: {
           pan: {
@@ -269,114 +242,15 @@ const ScatterPlot = React.memo(({
             y: { min: plotDataRange.yMin - yPadding, max: plotDataRange.yMax + yPadding }
           }
         }
-      },
-      interaction: {
-        mode: 'nearest',
-        intersect: true,
-        axis: 'xy'
-      },
-      animation: false,
-      responsive: true,
-      maintainAspectRatio: false,
-      onClick: (event, elements) => {
-        if (elements.length > 0) {
-          const index = elements[0].index;
-          const dataset = elements[0].datasetIndex;
-          const clickedPoint = chartData.datasets[dataset].data[index];
-          // Ensure we pass the full point data
-          const originalPoint = plotData.find(p => 
-            p.longitude === clickedPoint.longitude && 
-            p.latitude === clickedPoint.latitude
-          );
-          onPointSelect(originalPoint || clickedPoint);
-        }
-      },
-    };
-  }, [plotDataRange, onPointSelect, chartData.datasets, plotData]);
-
-  // Prevent chart recreation
-  useEffect(() => {
-    let chart = null;
-    
-    if (plotData.length > 0 && canvasRef.current) {
-      if (!chartRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        chart = new ChartJS(ctx, {
-          type: 'scatter',
-          data: chartData,
-          options: chartOptions
-        });
-        chartRef.current = chart;
-      } else {
-        chart = chartRef.current;
-        chart.data = chartData;
-        chart.options = chartOptions;
-        chart.update('none');
-      }
-    }
-
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy();
-        chartRef.current = null;
       }
     };
-  }, [plotData, chartData, chartOptions]);
-
-  // Separate effect for updating data
-  useEffect(() => {
-    if (chartRef.current) {
-      chartRef.current.data = chartData;
-      chartRef.current.update('none');
-    }
-  }, [chartData]);
-
-  // Always center on selected point while maintaining zoom
-  useEffect(() => {
-    if (selectedPoint && chartRef.current) {
-      const chart = chartRef.current;
-      const xScale = chart.scales.x;
-      const yScale = chart.scales.y;
-      
-      // Get current zoom level (range)
-      const currentXRange = xScale.max - xScale.min;
-      const currentYRange = yScale.max - yScale.min;
-      
-      // Calculate new boundaries to center the point
-      const newXMin = selectedPoint.x - (currentXRange / 2);
-      const newXMax = selectedPoint.x + (currentXRange / 2);
-      const newYMin = selectedPoint.y - (currentYRange / 2);
-      const newYMax = selectedPoint.y + (currentYRange / 2);
-      
-      // Set new scale boundaries
-      chart.scales.x.min = newXMin;
-      chart.scales.x.max = newXMax;
-      chart.scales.y.min = newYMin;
-      chart.scales.y.max = newYMax;
-      
-      // Force update without animation
-      chart.update('none');
-    }
-  }, [selectedPoint]);
+  }, [plotDataRange, selectedPCX, selectedPCY, formatCountryName]);
 
   const handleResetZoom = useCallback(() => {
     if (chartRef.current) {
-      const chart = chartRef.current;
-      const padding = 0.1; // Same padding as in chartOptions
-      const xRange = plotDataRange.xMax - plotDataRange.xMin;
-      const yRange = plotDataRange.yMax - plotDataRange.yMin;
-      const xPadding = xRange * padding;
-      const yPadding = yRange * padding;
-
-      // Reset to initial view with padding
-      chart.options.scales.x.min = plotDataRange.xMin - xPadding;
-      chart.options.scales.x.max = plotDataRange.xMax + xPadding;
-      chart.options.scales.y.min = plotDataRange.yMin - yPadding;
-      chart.options.scales.y.max = plotDataRange.yMax + yPadding;
-      
-      chart.update();
+      chartRef.current.resetZoom();
     }
-  }, [plotDataRange]);
+  }, []);
 
   const handleFlashPoints = useCallback(() => {
     if (flashIntervalRef.current) {
@@ -395,6 +269,51 @@ const ScatterPlot = React.memo(({
   }, []);
 
   useEffect(() => {
+    let chart = null;
+    
+    if (plotData.length > 0 && canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      
+      if (chartRef.current) {
+        chartRef.current.destroy();
+      }
+
+      chart = new ChartJS(ctx, {
+        type: 'scatter',
+        data: chartData,
+        options: chartOptions
+      });
+      
+      chartRef.current = chart;
+
+      const handleClick = (event) => {
+        if (!chart) return;
+        
+        const points = chart.getElementsAtEventForMode(
+          event,
+          'nearest',
+          { intersect: true },
+          true
+        );
+        
+        if (points && points.length) {
+          const point = chartData.datasets[points[0].datasetIndex].data[points[0].index];
+          onPointSelect(point);
+        }
+      };
+
+      chart.canvas.addEventListener('click', handleClick);
+
+      return () => {
+        if (chart) {
+          chart.canvas.removeEventListener('click', handleClick);
+          chart.destroy();
+        }
+      };
+    }
+  }, [plotData, chartData, chartOptions, onPointSelect]);
+
+  useEffect(() => {
     return () => {
       if (flashIntervalRef.current) {
         clearInterval(flashIntervalRef.current);
@@ -402,171 +321,55 @@ const ScatterPlot = React.memo(({
     };
   }, []);
 
-  // Use currentZoom when available
-  useEffect(() => {
-    if (chartRef.current && currentZoom) {
-      const chart = chartRef.current;
-      chart.scales.x.min = currentZoom.xMin;
-      chart.scales.x.max = currentZoom.xMax;
-      chart.scales.y.min = currentZoom.yMin;
-      chart.scales.y.max = currentZoom.yMax;
-      chart.update('none');
-    }
-  }, [currentZoom]);
-
-  const handleZoomToPoint = useCallback(() => {
-    if (selectedPoint && chartRef.current) {
-      const chart = chartRef.current;
-      
-      // Get current ranges
-      const xRange = chart.scales.x.max - chart.scales.x.min;
-      const yRange = chart.scales.y.max - chart.scales.y.min;
-      
-      // Update the chart's options directly
-      chart.options.scales.x.min = selectedPoint.x - xRange / 2;
-      chart.options.scales.x.max = selectedPoint.x + xRange / 2;
-      chart.options.scales.y.min = selectedPoint.y - yRange / 2;
-      chart.options.scales.y.max = selectedPoint.y + yRange / 2;
-      
-      // Force a full update
-      chart.update();
-
-      console.log('Updated chart position for point:', selectedPoint);
-    }
-  }, [selectedPoint]);
-
-  const handleClick = (event, elements) => {
-    if (elements.length > 0) {
-      const pointIndex = elements[0].index;
-      const point = plotData[pointIndex];
-      onPointSelect(point);
-    }
-  };
-
-  const baseDataset = {
-    data: plotData,
-    backgroundColor: (context) => {
-      const point = context.raw;
-      if (selectedPoint && 
-          point.longitude === selectedPoint.longitude && 
-          point.latitude === selectedPoint.latitude) {
-        return 'rgba(255, 0, 0, 0.8)'; // Bright red for selected point
-      }
-      if (selectedCountry && point.country === selectedCountry) {
-        return selectedCity && point.city === selectedCity 
-          ? 'rgba(255, 0, 0, 0.8)' 
-          : 'rgba(255, 165, 0, 0.8)'; // Orange for country matches
-      }
-      return getPointColor(point.continent);
-    },
-    borderColor: 'transparent',
-    borderWidth: 0,
-    pointRadius: (context) => {
-      const chart = context.chart;
-      const xScale = chart.scales.x;
-      const yScale = chart.scales.y;
-      
-      // Calculate zoom level based on the ratio of the original range to current range
-      const xZoom = (plotDataRange.xMax - plotDataRange.xMin) / (xScale.max - xScale.min);
-      const yZoom = (plotDataRange.yMax - plotDataRange.yMin) / (yScale.max - yScale.min);
-      const zoomFactor = Math.max(xZoom, yZoom);
-      
-      // Increase base radius to 2 (was 1), increases with zoom but caps at 8 (was 6)
-      return Math.min(2 * zoomFactor, 8);
-    },
-    pointHoverRadius: (context) => {
-      const chart = context.chart;
-      const xScale = chart.scales.x;
-      const yScale = chart.scales.y;
-      
-      const xZoom = (plotDataRange.xMax - plotDataRange.xMin) / (xScale.max - xScale.min);
-      const yZoom = (plotDataRange.yMax - plotDataRange.yMin) / (yScale.max - yScale.min);
-      const zoomFactor = Math.max(xZoom, yZoom);
-      
-      // Hover radius is slightly larger than regular radius
-      return Math.min(2 * zoomFactor, 8);
-    },
-    order: 2
-  };
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-lg">Loading...</div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ 
-      height: '100%', 
-      width: '100%', 
-      position: 'relative',
-      boxSizing: 'border-box',
-      paddingBottom: '40px'
-    }} ref={containerRef}>
-      <div style={{
-        position: 'absolute',
-        top: '10px',
-        right: '10px',
-        zIndex: 1,
-        display: 'flex',
-        gap: '10px'
-      }}>
+    <div className="relative w-full h-full">
+      <div className="absolute top-2 right-2 z-10 flex gap-2">
         <button
           onClick={handleResetZoom}
-          style={{
-            padding: '5px 10px',
-            backgroundColor: '#4CAF50',
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontSize: '12px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-          }}
+          className="px-3 py-1 bg-blue-500 text-white rounded text-sm shadow-sm hover:bg-blue-600 transition-colors"
         >
           Reset Zoom
         </button>
         {(selectedPoint || selectedCity) && (
           <button
             onClick={handleFlashPoints}
-            style={{
-              padding: '5px 10px',
-              backgroundColor: '#4CAF50',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-            }}
+            className="px-3 py-1 bg-blue-500 text-white rounded text-sm shadow-sm hover:bg-blue-600 transition-colors"
           >
-            Flash Selected Point(s)
-          </button>
-        )}
-        {selectedPoint && (
-          <button
-            onClick={handleZoomToPoint}
-            style={{
-              padding: '5px 10px',
-              backgroundColor: '#4CAF50',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-            }}
-          >
-            Zoom to Point
+            Flash Selected
           </button>
         )}
       </div>
-      
-      <div style={{ 
-        position: 'relative', 
-        height: '100%', 
-        width: '100%',
-        boxSizing: 'border-box'
-      }}>
-        <canvas ref={canvasRef} style={{ display: 'block', height: '100%', width: '100%' }} />
-        <CustomLegend />
+
+      <div className="absolute inset-0" ref={containerRef}>
+        <canvas ref={canvasRef} />
+      </div>
+
+      <div className="absolute left-2 bottom-2 bg-white/90 p-2 rounded-lg shadow-sm z-10">
+        <div className="text-sm font-medium mb-2">Continents</div>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(continentColors).map(([continent, color]) => (
+            <div key={continent} className="flex items-center">
+              <div
+                className="w-3 h-3 rounded mr-1"
+                style={{ backgroundColor: color }}
+              />
+              <span className="text-xs">{continent.replace('_', ' ')}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
 });
+
+ScatterPlot.displayName = 'ScatterPlot';
 
 export default ScatterPlot;

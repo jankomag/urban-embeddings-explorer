@@ -1,7 +1,7 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
- 
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -47,4 +47,42 @@
     --input: 217.2 32.6% 17.5%;
     --ring: 212.7 26.8% 83.9%;
   }
+}
+
+/* Add this to your existing CSS */
+.map-container {
+  height: 400px; /* Adjust as needed */
+}
+
+.scatter-plot-container {
+  height: 400px; /* Adjust as needed */
+}
+
+/* Add these new styles */
+html, body, #root {
+  height: 100vh;
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.map-container {
+  width: 100%;
+  height: 100%;
+}
+
+.scatter-plot-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Additional utility classes */
+.max-h-content {
+  max-height: calc(100vh - 2rem);
+}
+
+.min-h-content {
+  min-height: calc(100vh - 2rem);
 }
