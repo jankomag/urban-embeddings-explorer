@@ -33,7 +33,7 @@ app = FastAPI()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://your-ec2-public-ip:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
