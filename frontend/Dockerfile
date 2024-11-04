@@ -2,10 +2,13 @@
 FROM node:18-alpine AS builder
 WORKDIR /app
 
-# Copy package files first for better caching
+# Increase Node's memory limit
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+
+# Copy package files
 COPY package*.json ./
 
-# Install dependencies with specific flags to reduce memory usage
+# Install dependencies with specific flags
 RUN npm install --production=false --no-audit --no-fund --prefer-offline
 
 # Copy the rest of the application
@@ -18,7 +21,7 @@ RUN npm run build
 FROM node:18-alpine AS production
 WORKDIR /app
 
-# Install serve globally
+# Install serve
 RUN npm install -g serve@14.2.0
 
 # Create non-root user
@@ -27,9 +30,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 # Copy built files from builder stage
 COPY --from=builder /app/build ./build
 
-# Set user
 USER appuser
 
-# Expose port and set command
 EXPOSE 3000
 CMD ["serve", "-s", "build", "-l", "3000"]
