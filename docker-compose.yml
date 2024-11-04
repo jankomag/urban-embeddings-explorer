@@ -11,8 +11,10 @@ services:
       - ./data:/app/data:ro
     environment:
       - PYTHONUNBUFFERED=1
-    depends_on:
-      - redis
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -29,24 +31,13 @@ services:
       - backend
     environment:
       - NODE_ENV=production
+      - NODE_OPTIONS="--max-old-space-size=512"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  redis:
-    image: redis:6.2.6-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    command: ["redis-server", "--appendonly", "yes"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-
-volumes:
-  redis-data:
