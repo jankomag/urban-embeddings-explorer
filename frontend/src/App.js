@@ -7,11 +7,11 @@ import ScatterPlot from './components/ScatterPlot';
 import MapboxMapComponent from './components/MapboxMapComponent';
 
 const App = () => {
+  const [selectedPoint, setSelectedPoint] = useState(null);
   const [selectedCountry, setSelectedCountry] = useState('');
   const [selectedCity, setSelectedCity] = useState('');
   const [selectedPCX, setSelectedPCX] = useState(1);
   const [selectedPCY, setSelectedPCY] = useState(2);
-  const [selectedPoint, setSelectedPoint] = useState(null);
   const [allPoints, setAllPoints] = useState([]);
 
   // Fetch all points data when component mounts
@@ -30,6 +30,7 @@ const App = () => {
   }, []);
 
   const handlePointSelect = useCallback((point) => {
+    // Update all state at once with the selected point's data
     setSelectedPoint(point);
     setSelectedCountry(point.country);
     setSelectedCity(point.city);
@@ -38,6 +39,7 @@ const App = () => {
   const handleLocationSelect = useCallback((country, city) => {
     setSelectedCountry(country);
     setSelectedCity(city);
+    // Clear selected point when using location selector
     setSelectedPoint(null);
   }, []);
 
@@ -63,8 +65,7 @@ const App = () => {
                 <div className="flex items-center space-x-2 bg-white px-4 py-2 rounded-lg shadow-sm border">
                   <MapPin className="h-4 w-4 text-blue-500" />
                   <span className="font-medium">
-                    {selectedCountry}
-                    {selectedCity && `, ${selectedCity}`}
+                    {selectedPoint?.city || selectedCity || selectedCountry}
                   </span>
                 </div>
               )}

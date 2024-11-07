@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import Map, { Source, Layer, NavigationControl, FullscreenControl, ScaleControl, Marker } from 'react-map-gl';
+import Map, { Source, Layer, NavigationControl, FullscreenControl, ScaleControl } from 'react-map-gl';
 import bbox from '@turf/bbox';
 import bboxPolygon from '@turf/bbox-polygon';
 import buffer from '@turf/buffer';
@@ -8,52 +8,45 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 
 const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity }) => {
   const MAPBOX_TOKEN = process.env.REACT_APP_MAPBOX_TOKEN;
+  const SELECTED_POINT_ZOOM = 12; // Constant zoom level for selected points
+  
   const [hoverPoint, setHoverPoint] = useState(null);
   const [urbanAreasGeojson, setUrbanAreasGeojson] = useState(null);
-  const [loadError, setLoadError] = useState(null);
-
+  
   const [viewState, setViewState] = useState({
     longitude: 0,
     latitude: 20,
-    zoom: 1.5
+    zoom: 1.5,
+    transitionDuration: 0 // Start with no transition
   });
 
   useEffect(() => {
     const fetchUrbanAreas = async () => {
       try {
         const response = await fetch('http://localhost:8000/urban_areas');
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
-        
-        if (!data.type || !data.features) {
-          throw new Error('Invalid GeoJSON structure');
-        }
-        
         setUrbanAreasGeojson(data);
-        setLoadError(null);
       } catch (error) {
         console.error('Error fetching urban areas:', error);
-        setLoadError(error.message);
-        setUrbanAreasGeojson(null);
       }
     };
-
     fetchUrbanAreas();
   }, []);
 
+  // Update view when a point is selected
   useEffect(() => {
     if (selectedPoint) {
-      setViewState(prevViewState => ({
-        ...prevViewState,
+      setViewState({
         longitude: selectedPoint.longitude,
         latitude: selectedPoint.latitude,
-        transitionDuration: 1000
-      }));
+        zoom: SELECTED_POINT_ZOOM,
+        transitionDuration: 1000 // Smooth transition when point selected
+      });
     }
   }, [selectedPoint]);
 
+  // Update view when a city is selected
   useEffect(() => {
     if (selectedCity && urbanAreasGeojson) {
       const cityFeature = urbanAreasGeojson.features.find(
@@ -61,35 +54,30 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
       );
       if (cityFeature) {
         const [minLng, minLat, maxLng, maxLat] = bbox(cityFeature);
-        setViewState(prevViewState => ({
-          ...prevViewState,
+        setViewState({
           longitude: (minLng + maxLng) / 2,
           latitude: (minLat + maxLat) / 2,
-          zoom: 10,
+          zoom: SELECTED_POINT_ZOOM,
           transitionDuration: 1000
-        }));
+        });
       }
     }
   }, [selectedCity, urbanAreasGeojson]);
 
   const bboxPolygonData = useMemo(() => {
     if (!selectedPoint) return null;
-
     const center = point([selectedPoint.longitude, selectedPoint.latitude]);
     const boxSize = 2.24;
     const options = { units: 'kilometers' };
-    
     const bboxExtent = bbox(buffer(center, boxSize / 2, options));
     return bboxPolygon(bboxExtent);
   }, [selectedPoint]);
 
   const hoverBboxPolygonData = useMemo(() => {
     if (!hoverPoint) return null;
-
     const center = point([hoverPoint.longitude, hoverPoint.latitude]);
     const boxSize = 2.24;
     const options = { units: 'kilometers' };
-    
     const bboxExtent = bbox(buffer(center, boxSize / 2, options));
     return bboxPolygon(bboxExtent);
   }, [hoverPoint]);
@@ -152,7 +140,6 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
       }
     });
 
-    // Only trigger if we found a point and it's within a reasonable distance
     if (nearestPoint && minDistance < 2) {
       onMapClick(nearestPoint);
     }
@@ -235,20 +222,12 @@ const MapboxMapComponent = ({ selectedPoint, onMapClick, allPoints, selectedCity
       </Map>
       
       {selectedPoint && (
-        <div style={{
-          position: 'absolute',
-          bottom: '10px',
-          left: '10px',
-          backgroundColor: 'rgba(255, 255, 255, 0.7)',
-          padding: '5px',
-          borderRadius: '5px',
-          fontSize: '12px'
-        }}>
-          <p style={{margin: '0 0 5px 0'}}>Selected Point:</p>
-          <p style={{margin: '0 0 2px 0'}}>Lat: {selectedPoint.latitude.toFixed(6)}</p>
-          <p style={{margin: '0 0 2px 0'}}>Lon: {selectedPoint.longitude.toFixed(6)}</p>
-          <p style={{margin: '0 0 2px 0'}}>Country: {selectedPoint.country}</p>
-          <p style={{margin: '0'}}>City: {selectedPoint.city}</p>
+        <div className="absolute bottom-10 left-2 bg-white/90 p-2 rounded-lg shadow-sm text-xs space-y-1">
+          <p className="font-medium">Selected Point:</p>
+          <p>Lat: {selectedPoint.latitude.toFixed(6)}</p>
+          <p>Lon: {selectedPoint.longitude.toFixed(6)}</p>
+          <p>Country: {selectedPoint.country}</p>
+          <p>City: {selectedPoint.city}</p>
         </div>
       )}
     </div>
