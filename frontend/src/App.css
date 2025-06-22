@@ -134,15 +134,16 @@ header h1 {
   color: #555;
 }
 
-/* Similarity Panel */
+/* Similarity Panel - Fixed to account for header height */
 .similarity-panel {
   left: 20px;
   right: auto;
   position: absolute;
   top: 20px;
   width: 350px;
-  height: calc(100vh - 40px);
-  max-height: calc(100vh - 40px);
+  /* Calculate height accounting for header (~110px) + margins */
+  height: calc(100vh - 150px);
+  max-height: calc(100vh - 150px);
   min-height: 300px;
   background: white;
   border-radius: 8px;
@@ -161,6 +162,8 @@ header h1 {
   justify-content: space-between;
   align-items: center;
   flex-shrink: 0;
+  height: 60px; /* Fixed header height */
+  box-sizing: border-box;
 }
 
 .similarity-header h3 {
@@ -192,6 +195,10 @@ header h1 {
   overflow-y: auto;
   padding: 16px;
   min-height: 0;
+  /* Ensure content area takes up remaining space after header */
+  height: calc(100% - 60px);
+  max-height: calc(100% - 60px);
+  box-sizing: border-box;
 }
 
 .target-location {
@@ -199,6 +206,7 @@ header h1 {
   margin: -16px -16px 16px -16px;
   border-bottom: 1px solid #eee;
   background: #f8f9fa;
+  flex-shrink: 0; /* Prevent shrinking */
 }
 
 .target-location h4, .similar-results h4 {
@@ -238,11 +246,18 @@ header h1 {
 
 .similar-results {
   padding: 0.5rem 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .similar-list {
-  max-height: none;
-  overflow-y: visible;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 16px; /* Add bottom padding for spacing */
+  max-height: 100%;
 }
 
 .similar-item {
@@ -269,7 +284,7 @@ header h1 {
 }
 
 .similar-item:last-child {
-  margin-bottom: 16px;
+  margin-bottom: 0; /* Remove extra margin from last item */
 }
 
 .similar-item-image {
@@ -357,11 +372,29 @@ header h1 {
 }
 
 /* Responsive adjustments */
+@media (max-height: 700px) {
+  .similarity-panel {
+    height: calc(100vh - 130px);
+    max-height: calc(100vh - 130px);
+    top: 10px;
+  }
+  
+  .similarity-content {
+    height: calc(100% - 60px);
+    max-height: calc(100% - 60px);
+  }
+}
+
 @media (max-height: 600px) {
   .similarity-panel {
-    height: calc(100vh - 20px);
-    max-height: calc(100vh - 20px);
+    height: calc(100vh - 120px);
+    max-height: calc(100vh - 120px);
     top: 10px;
+  }
+  
+  .similarity-content {
+    height: calc(100% - 60px);
+    max-height: calc(100% - 60px);
   }
 }
 
