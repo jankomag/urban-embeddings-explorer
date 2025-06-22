@@ -1,58 +1,54 @@
-# Embeddings Viewer Web Application
+# 🛰️ Satellite Embeddings Explorer
 
-This web application visualizes global embeddings using t-SNE and geographic mapping.
+Interactive map for exploring city embeddings from satellite imagery. Click cities to find similar locations using AI.
 
-## Setup
+## Quick Start
 
-1. Ensure you have Docker and Docker Compose installed.
-2. Place your `global_tsne_results.parquet` file in the `data/` directory.
-3. Run `docker-compose up --build` to start the application.
-4. Access the web application at `http://localhost:3000`.
+### Backend
 
-## Development
+```bash
+cd backend
+pip install fastapi uvicorn python-dotenv sqlalchemy shapely numpy
+echo "MAPBOX_TOKEN=your_mapbox_token_here" > .env
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-- Backend: FastAPI application in `backend/`
-- Frontend: React application in `frontend/`
+### Frontend
 
-To run in development mode:
+```bash
+cd frontend
+npm install
+npm start
+```
 
-1. For backend: `cd backend && pip install -r requirements.txt && uvicorn main:app --reload`
-2. For frontend: `cd frontend && npm install && npm start`
+Open http://localhost:3000
+
+## Features
+
+- 🌍 Interactive satellite map (Mapbox GL)
+- 🔍 Click cities to view details
+- 🤝 AI-powered similarity search
+- 📊 Dataset statistics
+
+## Tech Stack
+
+- **Frontend**: React + Mapbox GL JS
+- **Backend**: FastAPI + Python
+- **Database**: PostgreSQL (optional, includes test data)
 
 ## API Endpoints
 
-- `/tsne_data`: Get t-SNE plot data
-- `/map_data`: Get geographic map data
+- `GET /api/config` - Mapbox token
+- `GET /api/locations` - All locations
+- `GET /api/similarity/{id}` - Find similar cities
 
-## Technologies Used
+## Environment
 
-- Backend: FastAPI, PyArrow, Shapely
-- Frontend: React, Chart.js, Leaflet
-- Data Storage: Parquet
+Create `backend/.env`:
 
 ```
-webapp/
-│
-├── backend/
-│   ├── main.py
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── frontend/
-│   ├── public/
-│   │   └── index.html
-│   ├── src/
-│   │   ├── App.js
-│   │   ├── components/
-│   │   │   ├── ScatterPlot.js
-│   │   │   └── MapComponent.js
-│   │   └── index.js
-│   ├── package.json
-│   └── Dockerfile
-│
-├── data/
-│   └── global_tsne_results.parquet
-│
-├── docker-compose.yml
-└── README.md
+MAPBOX_TOKEN=pk.eyJ...your_token_here
+DATABASE_URL=postgresql://user:pass@host:5432/db  # optional
 ```
+
+Get free Mapbox token at https://mapbox.com

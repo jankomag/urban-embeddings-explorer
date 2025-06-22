@@ -1,39 +1,25 @@
 {
-  "name": "embeddings-viewer",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
-    "@radix-ui/react-select": "^2.1.2",
-    "@radix-ui/react-separator": "^1.1.0",
-    "@radix-ui/react-slot": "^1.1.0",
-    "@turf/bbox": "^6.5.0",
-    "@turf/bbox-polygon": "^6.5.0",
-    "@turf/buffer": "^6.5.0",
-    "@turf/helpers": "^6.5.0",
-    "chart.js": "^3.9.1",
-    "chartjs-plugin-zoom": "^1.2.1",
-    "class-variance-authority": "^0.7.0",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.453.0",
-    "mapbox-gl": "^2.15.0",
-    "react": "^18.2.0",
-    "react-chartjs-2": "^4.3.1",
-    "react-dom": "^18.2.0",
-    "react-map-gl": "^7.1.0",
-    "react-scripts": "5.0.1",
-    "tailwind-merge": "^2.5.4"
-  },
+  "name": "embeddings-webapp-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for embeddings explorer",
+  "main": "src/index.js",
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
+  "dependencies": {
+    "@mapbox/polyline": "^1.1.1",
+    "mapbox-gl": "^3.0.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^5.16.4",
+    "@testing-library/react": "^13.3.0",
+    "@testing-library/user-event": "^13.5.0"
   },
   "browserslist": {
     "production": [
@@ -46,11 +32,5 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "devDependencies": {
-    "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
-    "tailwindcss": "^3.4.14"
   }
 }

@@ -1,196 +1,170 @@
-# main.py
-import os
-import numpy as np
-import pandas as pd
-import geopandas as gpd
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from database import load_embeddings_from_db
+from models import LocationData
+import numpy as np
 from typing import List
-import logging
-import json
-from pathlib import Path
-from sqlalchemy import create_engine, text
-import sys
 
-# Add the path to the Clay model
-current_dir = os.getcwd()
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-print(parent_dir)
+app = FastAPI(title="Embeddings Explorer", version="1.0.0")
 
-from db_config import get_db_url
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-app = FastAPI()
-
-# Enable CORS
+# Add CORS middleware - Updated for React app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",  # React dev server
+        "http://127.0.0.1:3000",  # Alternative localhost
+        "http://localhost:3001",  # Backup port
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global variables to store the data
-global_df = None
-urban_areas_gdf = None
-
-def format_country_name(name: str) -> str:
-    """Format country name to uppercase with underscores."""
-    return name.replace(' ', '_').upper()
-
-def format_continent_name(name: str) -> str:
-    """Format continent name to uppercase with underscores."""
-    return name.replace(' ', '_').upper()
-
-def load_pca_data():
-    """Load pre-computed PCA visualization data."""
-    global global_df
-    if global_df is None:
-        try:
-            current_dir = Path(__file__).resolve().parent
-            data_path = current_dir.parent / 'data' / 'global_pca_results.parquet'
-            
-            logger.info(f"Attempting to load data from: {data_path}")
-            
-            if not data_path.exists():
-                raise FileNotFoundError(f"Data file not found at {data_path}")
-            
-            global_df = pd.read_parquet(data_path)
-            
-            # Convert centroid string to actual coordinates
-            global_df[['longitude', 'latitude']] = global_df['centroid'].str.split(',', expand=True).astype(float)
-            
-            # Format country and continent names
-            global_df['country'] = global_df['country'].apply(format_country_name)
-            global_df['continent'] = global_df['continent'].apply(format_continent_name)
-            
-            # Pre-compute the dict representation for faster access
-            # Note: Using only PC1 and PC2 for visualization
-            global_df['dict_rep'] = global_df.apply(lambda row: {
-                'x': float(row['PC1']),  # Changed from 'x' to PC1
-                'y': float(row['PC2']),  # Changed from 'y' to PC2
-                'country': row['country'],
-                'continent': row['continent'],
-                'city': row['city'],
-                'longitude': float(row['longitude']),
-                'latitude': float(row['latitude']),
-                # Add all PCs to the response
-                'pcs': {f'PC{i}': float(row[f'PC{i}']) for i in range(1, 11)}
-            }, axis=1).tolist()
-            
-            logger.info(f"Successfully loaded {len(global_df)} data points")
-            
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            raise HTTPException(status_code=500, detail=f"Error loading data: {str(e)}")
-    return global_df
-
-def load_urban_areas():
-    """Load urban areas GeoJSON data."""
-    global urban_areas_gdf
-    if urban_areas_gdf is None:
-        try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(current_dir, '..', 'data', 'urban_areas.geojson')
-            
-            logger.info(f"Loading urban areas from: {file_path}")
-            
-            urban_areas_gdf = gpd.read_file(file_path)
-            urban_areas_gdf['city'] = urban_areas_gdf['city'].str.lower()
-            logger.info(f"Loaded {len(urban_areas_gdf)} urban areas")
-        except Exception as e:
-            logger.error(f"Error loading urban areas data: {e}")
-            raise HTTPException(status_code=500, detail=f"Error loading urban areas data: {str(e)}")
-    return urban_areas_gdf
+# Global variable to store loaded data
+embeddings_data = None
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize data on startup."""
-    load_pca_data()
-    load_urban_areas()
-
-@app.get("/urban_areas")
-async def get_urban_areas():
-    """Get all urban areas as GeoJSON."""
+    """Load embeddings data on startup"""
+    global embeddings_data
     try:
-        gdf = load_urban_areas()
-        if gdf is None:
-            logger.error("Urban areas GeoDataFrame is None")
-            raise HTTPException(status_code=500, detail="Failed to load urban areas data")
-        
-        logger.info(f"Converting {len(gdf)} urban areas to GeoJSON")
-        geojson = gdf.to_crs(epsg=4326).to_json()
-        return JSONResponse(content=json.loads(geojson))
+        print("Loading embeddings data...")
+        embeddings, city_labels, country_labels, continent_labels, geometries, dates = load_embeddings_from_db()
+        embeddings_data = {
+            'embeddings': embeddings,
+            'cities': city_labels,
+            'countries': country_labels,
+            'continents': continent_labels,
+            'geometries': geometries,
+            'dates': dates
+        }
+        print(f"Successfully loaded {len(embeddings)} locations")
     except Exception as e:
-        logger.error(f"Error in /urban_areas: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error fetching urban areas: {str(e)}")
-
-@app.get("/urban_areas/{city}")
-async def get_urban_area(city: str):
-    """Get urban area for a specific city."""
-    try:
-        gdf = load_urban_areas()
-        if gdf is None:
-            raise HTTPException(status_code=404, detail="Urban areas data not found")
-        
-        city_data = gdf[gdf['city'].str.lower() == city.lower()]
-        
-        if city_data.empty:
-            raise HTTPException(status_code=404, detail="City not found")
-        
-        geojson = city_data.to_crs(epsg=4326).to_json()
-        return JSONResponse(content=json.loads(geojson))
-    except Exception as e:
-        logger.error(f"Error in /urban_area: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching urban area for {city}")
-
-@app.get("/pca_data")
-async def get_pca_data():
-    """Get all PCA data points."""
-    try:
-        df = load_pca_data()
-        return {"data": df['dict_rep'].tolist()}
-    except Exception as e:
-        logger.error(f"Error in /pca_data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/countries")
-async def get_countries() -> List[str]:
-    """Get list of all countries."""
-    try:
-        df = load_pca_data()
-        return sorted(df['country'].unique().tolist())
-    except Exception as e:
-        logger.error(f"Error in /countries: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching country list")
-
-@app.get("/cities/{country}")
-async def get_cities(country: str) -> List[str]:
-    """Get list of cities for a specific country."""
-    try:
-        df = load_pca_data()
-        cities = sorted(df[df['country'] == country]['city'].unique().tolist())
-        if not cities:
-            raise HTTPException(status_code=404, detail="Country not found")
-        return cities
-    except Exception as e:
-        logger.error(f"Error in /cities: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching cities for {country}")
+        print(f"Error loading embeddings: {str(e)}")
+        embeddings_data = None
 
 @app.get("/")
-async def read_root():
-    """Root endpoint."""
-    return {"message": "Welcome to the PCA Urban Embeddings Viewer API!"}
+async def root():
+    """Root endpoint"""
+    return {"message": "Embeddings Explorer API", "status": "running"}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/api/locations", response_model=List[LocationData])
+async def get_locations():
+    """Get all locations with their basic info"""
+    if embeddings_data is None:
+        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    
+    locations = []
+    for i in range(len(embeddings_data['cities'])):
+        geom = embeddings_data['geometries'][i]
+        location = LocationData(
+            id=i,
+            city=embeddings_data['cities'][i],
+            country=embeddings_data['countries'][i],
+            continent=embeddings_data['continents'][i],
+            longitude=geom.x,
+            latitude=geom.y,
+            date=str(embeddings_data['dates'][i]) if embeddings_data['dates'][i] else None
+        )
+        locations.append(location)
+    
+    return locations
+
+@app.get("/api/locations/{location_id}")
+async def get_location(location_id: int):
+    """Get detailed info for a specific location"""
+    if embeddings_data is None:
+        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    
+    if location_id >= len(embeddings_data['cities']) or location_id < 0:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    geom = embeddings_data['geometries'][location_id]
+    return {
+        "id": location_id,
+        "city": embeddings_data['cities'][location_id],
+        "country": embeddings_data['countries'][location_id],
+        "continent": embeddings_data['continents'][location_id],
+        "longitude": geom.x,
+        "latitude": geom.y,
+        "date": str(embeddings_data['dates'][location_id]) if embeddings_data['dates'][location_id] else None,
+        "embedding_shape": embeddings_data['embeddings'][location_id].shape
+    }
+
+@app.get("/api/stats")
+async def get_stats():
+    """Get basic statistics about the dataset"""
+    if embeddings_data is None:
+        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    
+    countries = list(set(embeddings_data['countries']))
+    continents = list(set(embeddings_data['continents']))
+    
+    return {
+        "total_locations": len(embeddings_data['cities']),
+        "countries_count": len(countries),
+        "continents_count": len(continents),
+        "embedding_dimension": embeddings_data['embeddings'][0].shape[0] if len(embeddings_data['embeddings']) > 0 else 0,
+        "countries": sorted(countries),
+        "continents": sorted(continents)
+    }
+
+@app.get("/api/config")
+async def get_config():
+    """Get configuration including Mapbox token"""
+    return {
+        "mapbox_token": os.getenv("MAPBOX_TOKEN", "")
+    }
+
+@app.get("/api/similarity/{location_id}")
+async def find_similar_locations(location_id: int, top_k: int = 5):
+    """Find most similar locations to the given location"""
+    if embeddings_data is None:
+        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    
+    if location_id >= len(embeddings_data['cities']) or location_id < 0:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    # Get the target embedding
+    target_embedding = embeddings_data['embeddings'][location_id]
+    
+    # Calculate cosine similarities with all other embeddings
+    similarities = []
+    for i, embedding in enumerate(embeddings_data['embeddings']):
+        if i != location_id:  # Skip the target location itself
+            # Calculate cosine similarity
+            dot_product = np.dot(target_embedding, embedding)
+            norm_target = np.linalg.norm(target_embedding)
+            norm_embedding = np.linalg.norm(embedding)
+            
+            if norm_target == 0 or norm_embedding == 0:
+                cosine_sim = 0
+            else:
+                cosine_sim = dot_product / (norm_target * norm_embedding)
+            
+            similarities.append((i, cosine_sim))
+    
+    # Sort by similarity (highest first) and get top_k
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    top_similar = similarities[:top_k]
+    
+    # Format response
+    similar_locations = []
+    for idx, sim_score in top_similar:
+        geom = embeddings_data['geometries'][idx]
+        similar_locations.append({
+            "id": idx,
+            "city": embeddings_data['cities'][idx],
+            "country": embeddings_data['countries'][idx],
+            "continent": embeddings_data['continents'][idx],
+            "longitude": geom.x,
+            "latitude": geom.y,
+            "date": str(embeddings_data['dates'][idx]) if embeddings_data['dates'][idx] else None,
+            "similarity_score": float(sim_score)
+        })
+    
+    return {
+        "target_location_id": location_id,
+        "similar_locations": similar_locations
+    }

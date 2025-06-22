@@ -1,18 +1,15 @@
-# preprocess_embeddings.py
-import sys
 import numpy as np
-import pandas as pd
 from sqlalchemy import create_engine, text
-import geopandas as gpd
-from geoalchemy2 import Geometry
-from shapely import wkb
 from shapely.geometry import Point
-import umap
-from tqdm import tqdm
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 import os
-from db_config import get_db_url
+from dotenv import load_dotenv
+
+load_dotenv()
+
+def get_db_url():
+    """Get database URL from environment variables"""
+    # Assuming you have these in your .env file
+    return os.getenv("DATABASE_URL")
 
 def load_embeddings_from_db():
     """Load embeddings from PostgreSQL database."""
@@ -31,7 +28,7 @@ def load_embeddings_from_db():
             ST_X(geom) as longitude,
             ST_Y(geom) as latitude,
             date
-        FROM city_embeddings
+        FROM city_embeddings_new
         """)
         
         with engine.connect() as connection:
@@ -104,58 +101,3 @@ def load_embeddings_from_db():
         print("Detailed error:")
         print(traceback.format_exc())
         raise
-
-def main():
-    print("Loading embeddings from database...")
-    embeddings, city_labels, country_labels, continent_labels, geometries, dates = load_embeddings_from_db()
-
-    print("Performing PCA...")
-    # Standardize the embeddings first
-    scaler = StandardScaler()
-    embeddings_scaled = scaler.fit_transform(embeddings)
-    
-    # Apply PCA with 10 components
-    n_components = 10
-    pca = PCA(n_components=n_components, random_state=42)
-    reduced_embeddings = pca.fit_transform(embeddings_scaled)
-
-    # Reduce precision of PCA results
-    embeddings_nd = np.round(reduced_embeddings, decimals=5)
-
-    print(f"Explained variance ratios: {pca.explained_variance_ratio_}")
-
-    print("Creating DataFrame...")
-    # Create columns for all PCs
-    pc_columns = {f'PC{i+1}': embeddings_nd[:, i] for i in range(n_components)}
-    
-    df = pd.DataFrame({
-        **pc_columns,  # Unpack all PC columns
-        'centroid': [f"{geom.x},{geom.y}" for geom in geometries],
-        'continent': continent_labels,
-        'country': country_labels,
-        'city': city_labels,
-        'date': dates
-    })
-
-    print("Saving results...")
-    os.makedirs('data', exist_ok=True)
-    
-    output_path = 'data/global_pca_results.parquet'
-    df.to_parquet(output_path, compression='snappy', index=False)
-    print(f"Results saved to {output_path}")
-
-    # Print debug information
-    print(f"\nSummary Statistics:")
-    print(f"Total number of data points: {len(df)}")
-    print(f"Number of unique continents: {df['continent'].nunique()}")
-    print(f"Number of unique countries: {df['country'].nunique()}")
-    print(f"Number of unique cities: {df['city'].nunique()}")
-    print(f"\nSample of processed data:")
-    print(df.head(2))
-    
-    print("\nShape information:")
-    print(f"Original embeddings shape: {embeddings.shape}")
-    print(f"Reduced embeddings shape: {reduced_embeddings.shape}")
-
-if __name__ == "__main__":
-    main()
