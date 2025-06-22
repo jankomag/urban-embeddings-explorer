@@ -7,6 +7,7 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const tooltipRef = useRef(null);
 
   const API_BASE_URL = process.env.NODE_ENV === 'production' 
     ? 'https://your-domain.com'
@@ -39,6 +40,34 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
     updateDimensions();
     window.addEventListener('resize', updateDimensions);
     return () => window.removeEventListener('resize', updateDimensions);
+  }, []);
+
+  // Clean up tooltip when component unmounts or view changes
+  useEffect(() => {
+    return () => {
+      if (tooltipRef.current) {
+        tooltipRef.current.remove();
+        tooltipRef.current = null;
+      }
+    };
+  }, []);
+
+  // Clean up tooltip when switching views
+  useEffect(() => {
+    const handleViewChange = () => {
+      if (tooltipRef.current) {
+        tooltipRef.current.style('opacity', 0);
+      }
+    };
+
+    // Listen for view changes or any clicks outside UMAP
+    window.addEventListener('beforeunload', handleViewChange);
+    document.addEventListener('click', handleViewChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleViewChange);
+      document.removeEventListener('click', handleViewChange);
+    };
   }, []);
 
   // Fetch UMAP data when component mounts
@@ -150,12 +179,27 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
       .attr('transform', `translate(${margin.left},${margin.top})`);
 
     // Add background
-    container.append('rect')
+    const background = container.append('rect')
       .attr('width', plotWidth)
       .attr('height', plotHeight)
       .attr('fill', '#f8f9fa')
       .attr('stroke', '#dee2e6')
       .attr('rx', 4);
+
+    // Add zoom behavior
+    const zoom = d3.zoom()
+      .scaleExtent([0.5, 10])
+      .on('zoom', (event) => {
+        const { transform } = event;
+        container.selectAll('.umap-point')
+          .attr('transform', transform);
+        container.selectAll('.x-axis')
+          .call(d3.axisBottom(transform.rescaleX(xScale)).ticks(6));
+        container.selectAll('.y-axis')
+          .call(d3.axisLeft(transform.rescaleY(yScale)).ticks(6));
+      });
+
+    svg.call(zoom);
 
     // Add axes
     const xAxis = d3.axisBottom(xScale).ticks(6);
@@ -186,8 +230,12 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
       .attr('y', -40)
       .text('UMAP Dimension 2');
 
-    // Create tooltip
-    const tooltip = d3.select('body').append('div')
+    // Create tooltip - only for UMAP view
+    if (tooltipRef.current) {
+      tooltipRef.current.remove();
+    }
+    
+    tooltipRef.current = d3.select('body').append('div')
       .attr('class', 'umap-tooltip')
       .style('opacity', 0)
       .style('position', 'absolute')
@@ -211,41 +259,55 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
       .attr('fill', d => continentColors[d.continent] || '#666')
       .attr('stroke', d => selectedLocations.has(d.location_id) ? '#ff6b6b' : '#fff')
       .attr('stroke-width', d => selectedLocations.has(d.location_id) ? 3 : 1)
-      .attr('opacity', 0.8)
+      .attr('opacity', 0.6) // More transparent points
       .style('cursor', 'pointer')
       .on('mouseover', function(event, d) {
         d3.select(this)
           .transition()
           .duration(150)
           .attr('r', 6)
-          .attr('opacity', 1);
+          .attr('opacity', 0.9);
 
-        tooltip.transition()
-          .duration(200)
-          .style('opacity', .9);
-        
-        tooltip.html(`
-          <strong>${d.city}</strong><br/>
-          ${d.country}<br/>
-          <em>${d.continent}</em>
-        `)
-          .style('left', (event.pageX + 10) + 'px')
-          .style('top', (event.pageY - 28) + 'px');
+        if (tooltipRef.current) {
+          tooltipRef.current.transition()
+            .duration(200)
+            .style('opacity', .9);
+          
+          tooltipRef.current.html(`
+            <strong>${d.city}</strong><br/>
+            ${d.country}<br/>
+            <em>${d.continent}</em>
+          `)
+            .style('left', (event.pageX + 10) + 'px')
+            .style('top', (event.pageY - 28) + 'px');
+        }
       })
       .on('mouseout', function(event, d) {
         d3.select(this)
           .transition()
           .duration(150)
           .attr('r', selectedLocations.has(d.location_id) ? 6 : 4)
-          .attr('opacity', 0.8);
+          .attr('opacity', 0.6);
 
-        tooltip.transition()
-          .duration(500)
-          .style('opacity', 0);
+        if (tooltipRef.current) {
+          tooltipRef.current.transition()
+            .duration(500)
+            .style('opacity', 0);
+        }
       })
       .on('click', function(event, d) {
+        event.stopPropagation(); // Prevent event bubbling
         onLocationSelect(d.location_id);
       });
+
+    // Hide tooltip when clicking on background
+    background.on('click', () => {
+      if (tooltipRef.current) {
+        tooltipRef.current.transition()
+          .duration(300)
+          .style('opacity', 0);
+      }
+    });
 
     // Add legend
     const legend = container.append('g')
@@ -264,7 +326,8 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
       .attr('cx', 8)
       .attr('cy', 8)
       .attr('r', 5)
-      .attr('fill', d => continentColors[d]);
+      .attr('fill', d => continentColors[d])
+      .attr('opacity', 0.6);
 
     legendItems.append('text')
       .attr('x', 18)
@@ -273,11 +336,6 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
       .style('font-size', '11px')
       .style('fill', '#333')
       .text(d => d);
-
-    // Clean up tooltip on component unmount
-    return () => {
-      tooltip.remove();
-    };
   };
 
   const highlightPoint = (locationId) => {
@@ -291,7 +349,7 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
       .duration(300)
       .attr('r', d => selectedLocations.has(d.location_id) ? 6 : 4)
       .attr('stroke-width', d => selectedLocations.has(d.location_id) ? 3 : 1)
-      .attr('opacity', 0.8);
+      .attr('opacity', 0.6);
 
     // Highlight specific point
     svg.selectAll('.umap-point')
@@ -312,7 +370,7 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
         .attr('r', d => selectedLocations.has(d.location_id) ? 6 : 4)
         .attr('stroke', d => selectedLocations.has(d.location_id) ? '#ff6b6b' : '#fff')
         .attr('stroke-width', d => selectedLocations.has(d.location_id) ? 3 : 1)
-        .attr('opacity', 0.8);
+        .attr('opacity', 0.6);
     }, 2000);
   };
 
@@ -341,7 +399,7 @@ const UMapView = ({ locations, selectedLocations, onLocationSelect }) => {
     <div className="umap-container">
       <div className="umap-header">
         <h3>UMAP Embedding Visualization</h3>
-        <p>Points colored by continent • Click to select • Hover for details</p>
+        <p>Points colored by continent • Click to select • Hover for details • Scroll to zoom</p>
       </div>
       <div className="umap-plot">
         <svg ref={svgRef}></svg>

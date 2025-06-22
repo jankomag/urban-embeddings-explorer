@@ -28,7 +28,7 @@ def load_embeddings_from_db():
             ST_X(geom) as longitude,
             ST_Y(geom) as latitude,
             date
-        FROM city_embeddings_new
+        FROM city_embeddings_112_0625
         """)
         
         with engine.connect() as connection:

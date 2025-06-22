@@ -11,3 +11,4 @@ Thumbs.db
 frontend/src/Appfull.js
 # Log files
 *.log
+*pyc

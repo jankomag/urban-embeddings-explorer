@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 
-const TILE_SIZE_METERS = 1000;
+const TILE_SIZE_METERS = 1120;
 
 const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }) => {
   const mapContainer = useRef(null);
@@ -265,7 +265,7 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
   const zoomToLocation = (longitude, latitude, locationId) => {
     map.current.flyTo({
       center: [longitude, latitude],
-      zoom: 13,
+      zoom: 15,
       duration: 1000
     });
 
