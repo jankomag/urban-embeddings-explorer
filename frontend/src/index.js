@@ -1,54 +1,49 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
-import mapboxgl from 'mapbox-gl';
-import polyline from '@mapbox/polyline';
-import './App.css'; // Your single CSS file
+import './App.css';
+import MapView from './MapView';
+import UMapView from './UMapView';
 
-// Configuration
-const API_BASE_URL = 'http://localhost:8000';
-const TILE_SIZE_METERS = 3360;
+const API_BASE_URL = process.env.NODE_ENV === 'production' 
+  ? 'https://your-domain.com'
+  : 'http://localhost:8000';
 
 function App() {
   // State management
   const [locations, setLocations] = useState([]);
   const [selectedLocations, setSelectedLocations] = useState(new Set());
   const [currentSelectedLocation, setCurrentSelectedLocation] = useState(null);
+  const [similarResults, setSimilarResults] = useState([]);
+  const [findingSimilar, setFindingSimilar] = useState(false);
+  const [showSimilarResults, setShowSimilarResults] = useState(false);
   const [totalLocations, setTotalLocations] = useState('Loading...');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mapboxToken, setMapboxToken] = useState('');
-  const [similarResults, setSimilarResults] = useState([]);
-  const [showSimilarResults, setShowSimilarResults] = useState(false);
-  const [findingSimilar, setFindingSimilar] = useState(false);
-  const [showSimilarityPanel, setShowSimilarityPanel] = useState(false);
-
-  // Refs
-  const mapContainer = useRef(null);
-  const map = useRef(null);
-  const hoveredLocationId = useRef(null);
+  const [showUMap, setShowUMap] = useState(false);
 
   // Initialize app
   useEffect(() => {
+    const initializeApp = async () => {
+      try {
+        setLoading(true);
+        const config = await loadConfig();
+        setMapboxToken(config.mapbox_token);
+        
+        await Promise.all([
+          loadStats(),
+          loadLocations()
+        ]);
+      } catch (error) {
+        console.error('Error initializing app:', error);
+        setError('Failed to initialize application. Please refresh the page.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
     initializeApp();
   }, []);
-
-  const initializeApp = async () => {
-    try {
-      // Load config first to get Mapbox token
-      const config = await loadConfig();
-      setMapboxToken(config.mapbox_token);
-
-      // Initialize map
-      initializeMap(config.mapbox_token);
-
-      // Load data
-      await Promise.all([loadStats(), loadLocations()]);
-
-    } catch (error) {
-      console.error('Error initializing app:', error);
-      setError('Failed to initialize application. Please refresh the page.');
-    }
-  };
 
   const loadConfig = async () => {
     const response = await fetch(`${API_BASE_URL}/api/config`);
@@ -81,258 +76,6 @@ function App() {
     }
   };
 
-  const initializeMap = (token) => {
-    mapboxgl.accessToken = token;
-
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: 'mapbox://styles/mapbox/satellite-v9',
-      center: [0, 20],
-      zoom: 2
-    });
-
-    map.current.addControl(new mapboxgl.NavigationControl());
-
-    map.current.on('load', () => {
-      console.log('Map loaded successfully');
-      if (locations.length > 0) {
-        addLocationsToMap();
-      }
-    });
-  };
-
-  // Add locations to map when both map and locations are ready
-  useEffect(() => {
-    if (map.current && map.current.isStyleLoaded() && locations.length > 0) {
-      addLocationsToMap();
-    }
-  }, [locations]);
-
-  const createTilePolygon = (centerLng, centerLat, sizeMeters) => {
-    const metersPerDegreeLat = 111320;
-    const metersPerDegreeLng = 111320 * Math.cos(centerLat * Math.PI / 180);
-
-    const latOffset = (sizeMeters / 2) / metersPerDegreeLat;
-    const lngOffset = (sizeMeters / 2) / metersPerDegreeLng;
-
-    return [
-      [centerLng - lngOffset, centerLat + latOffset],
-      [centerLng + lngOffset, centerLat + latOffset],
-      [centerLng + lngOffset, centerLat - latOffset],
-      [centerLng - lngOffset, centerLat - latOffset],
-      [centerLng - lngOffset, centerLat + latOffset]
-    ];
-  };
-
-  const addLocationsToMap = () => {
-    console.log('Adding locations to map...');
-    
-    const tileFeatures = locations.map(location => ({
-      type: 'Feature',
-      geometry: {
-        type: 'Polygon',
-        coordinates: [createTilePolygon(location.longitude, location.latitude, TILE_SIZE_METERS)]
-      },
-      properties: {
-        id: location.id,
-        city: location.city,
-        country: location.country,
-        continent: location.continent,
-        date: location.date,
-        longitude: location.longitude,
-        latitude: location.latitude
-      }
-    }));
-
-    const pointFeatures = locations.map(location => ({
-      type: 'Feature',
-      geometry: {
-        type: 'Point',
-        coordinates: [location.longitude, location.latitude]
-      },
-      properties: {
-        id: location.id,
-        city: location.city,
-        country: location.country,
-        continent: location.continent,
-        date: location.date
-      }
-    }));
-
-    // Add sources
-    map.current.addSource('tiles', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: tileFeatures
-      }
-    });
-
-    map.current.addSource('points', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: pointFeatures
-      }
-    });
-
-    // Add layers
-    addMapLayers();
-    addMapEventListeners();
-
-    console.log('Successfully added all layers and event listeners');
-    setLoading(false);
-  };
-
-  const addMapLayers = () => {
-    map.current.addLayer({
-      id: 'tiles-fill',
-      type: 'fill',
-      source: 'tiles',
-      paint: {
-        'fill-color': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          '#ff6b6b',
-          'transparent'
-        ],
-        'fill-opacity': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          0.6,
-          0
-        ]
-      }
-    });
-
-    map.current.addLayer({
-      id: 'tiles-border',
-      type: 'line',
-      source: 'tiles',
-      paint: {
-        'line-color': [
-          'case',
-          ['==', ['get', 'id'], hoveredLocationId.current || -1],
-          '#4ecdc4',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          '#ff6b6b',
-          'rgba(255, 255, 255, 0.4)'
-        ],
-        'line-width': [
-          'case',
-          ['==', ['get', 'id'], hoveredLocationId.current || -1],
-          3,
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          2,
-          1
-        ]
-      }
-    });
-
-    map.current.addLayer({
-      id: 'points-layer',
-      type: 'circle',
-      source: 'points',
-      paint: {
-        'circle-color': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          '#ff6b6b',
-          '#4ecdc4'
-        ],
-        'circle-radius': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          8,
-          6
-        ],
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#ffffff'
-      }
-    });
-  };
-
-  const addMapEventListeners = () => {
-    // Tile interactions
-    map.current.on('mouseenter', 'tiles-fill', (e) => {
-      map.current.getCanvas().style.cursor = 'pointer';
-      hoveredLocationId.current = e.features[0].properties.id;
-      updateTileStyles();
-    });
-
-    map.current.on('mouseleave', 'tiles-fill', () => {
-      map.current.getCanvas().style.cursor = '';
-      hoveredLocationId.current = null;
-      updateTileStyles();
-    });
-
-    map.current.on('click', 'tiles-fill', (e) => {
-      const locationId = e.features[0].properties.id;
-      toggleLocationSelection(locationId);
-      showLocationPopup(
-        [e.features[0].properties.longitude, e.features[0].properties.latitude],
-        e.features[0].properties
-      );
-    });
-
-    // Point interactions
-    map.current.on('click', 'points-layer', (e) => {
-      const locationId = e.features[0].properties.id;
-      toggleLocationSelection(locationId);
-      showLocationPopup(e.features[0].geometry.coordinates, e.features[0].properties);
-    });
-  };
-
-  const toggleLocationSelection = (locationId) => {
-    const newSelected = new Set();
-    let newCurrentLocation = null;
-
-    if (!selectedLocations.has(locationId)) {
-      newSelected.add(locationId);
-      newCurrentLocation = locations.find(loc => loc.id === locationId);
-      setShowSimilarityPanel(true);
-    } else {
-      setShowSimilarityPanel(false);
-    }
-
-    setSelectedLocations(newSelected);
-    setCurrentSelectedLocation(newCurrentLocation);
-    setShowSimilarResults(false);
-    setSimilarResults([]);
-  };
-
-  const updateTileStyles = useCallback(() => {
-    if (map.current && map.current.getLayer('tiles-fill')) {
-      map.current.setPaintProperty('tiles-fill', 'fill-color', [
-        'case',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b',
-        'transparent'
-      ]);
-
-      map.current.setPaintProperty('tiles-border', 'line-color', [
-        'case',
-        ['==', ['get', 'id'], hoveredLocationId.current || -1],
-        '#4ecdc4',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b',
-        'rgba(255, 255, 255, 0.4)'
-      ]);
-    }
-  }, [selectedLocations]);
-
-  useEffect(() => {
-    updateTileStyles();
-  }, [selectedLocations, updateTileStyles]);
-
-  const clearSelection = () => {
-    setSelectedLocations(new Set());
-    setCurrentSelectedLocation(null);
-    setShowSimilarityPanel(false);
-    setShowSimilarResults(false);
-    setSimilarResults([]);
-  };
-
   const findSimilarLocations = async () => {
     if (!currentSelectedLocation) return;
 
@@ -352,63 +95,26 @@ function App() {
     }
   };
 
-  const getStaticMapImage = (longitude, latitude, width = 320, height = 320) => {
-    if (!mapboxToken) return '';
-    
-    const tileBoundaryCoords = createTilePolygon(longitude, latitude, TILE_SIZE_METERS);
-    const coordsForPolyline = tileBoundaryCoords.map(coord => [coord[1], coord[0]]);
-    
-    const encoded = polyline.encode(coordsForPolyline);
-    const urlEncodedPolyline = encodeURIComponent(encoded);
-    const tilePath = `path-3+ffffff-0.90(${urlEncodedPolyline})`;
-    const zoom = 12;
-
-    return `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${tilePath}/${longitude},${latitude},${zoom}/${width}x${height}@2x?access_token=${mapboxToken}`;
+  const clearSelection = () => {
+    setSelectedLocations(new Set());
+    setCurrentSelectedLocation(null);
+    setShowSimilarResults(false);
+    setSimilarResults([]);
   };
 
-  const zoomToLocation = (longitude, latitude, locationId) => {
-    map.current.flyTo({
-      center: [longitude, latitude],
-      zoom: 13,
-      duration: 1000
-    });
+  const handleLocationSelect = (locationId) => {
+    const newSelected = new Set();
+    let newCurrentLocation = null;
 
-    setTimeout(() => {
-      const location = locations.find(loc => loc.id === locationId);
-      if (location) {
-        showLocationPopup([longitude, latitude], location);
-      }
-    }, 2000);
-  };
+    if (!selectedLocations.has(locationId)) {
+      newSelected.add(locationId);
+      newCurrentLocation = locations.find(loc => loc.id === locationId);
+    }
 
-  const showLocationPopup = (coordinates, properties) => {
-    const isSelected = selectedLocations.has(properties.id);
-    const popupHtml = `
-      <div class="popup-content">
-        <h4>${properties.city} ${isSelected ? '✓' : ''}</h4>
-        <div class="popup-item">
-          <span class="popup-label">Country:</span> ${properties.country}
-        </div>
-        <div class="popup-item">
-          <span class="popup-label">Continent:</span> ${properties.continent}
-        </div>
-        <div class="popup-item">
-          <span class="popup-label">Status:</span> ${isSelected ? 'Selected' : 'Not selected'}
-        </div>
-        ${properties.date ? `<div class="popup-item">
-          <span class="popup-label">Date:</span> ${properties.date}
-        </div>` : ''}
-      </div>
-    `;
-
-    new mapboxgl.Popup({
-      closeButton: true,
-      closeOnClick: true,
-      focusAfterOpen: false
-    })
-      .setLngLat(coordinates)
-      .setHTML(popupHtml)
-      .addTo(map.current);
+    setSelectedLocations(newSelected);
+    setCurrentSelectedLocation(newCurrentLocation);
+    setShowSimilarResults(false);
+    setSimilarResults([]);
   };
 
   return (
@@ -418,6 +124,20 @@ function App() {
         <div className="controls-header">
           <div className="stats">
             <span>{totalLocations}</span> locations
+          </div>
+          <div className="view-controls">
+            <button 
+              className={`view-toggle ${!showUMap ? 'active' : ''}`}
+              onClick={() => setShowUMap(false)}
+            >
+              🗺️ Map View
+            </button>
+            <button 
+              className={`view-toggle ${showUMap ? 'active' : ''}`}
+              onClick={() => setShowUMap(true)}
+            >
+              📊 UMAP View
+            </button>
           </div>
           <div className="selection-info">
             <span>{selectedLocations.size}</span> selected
@@ -432,21 +152,15 @@ function App() {
         </div>
       </header>
 
-      <div className="map-container">
-        <div ref={mapContainer} className="map" />
-        
-        {showSimilarityPanel && (
-          <div className="similarity-panel">
-            <div className="similarity-header">
-              <h3>Similar Locations</h3>
-              <button 
-                className="close-panel"
-                onClick={() => setShowSimilarityPanel(false)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="similarity-content">
+      <div className="main-content">
+        {/* Fixed Left Panel */}
+        <div className="left-panel">
+          <div className="panel-header">
+            <h3>Analysis Panel</h3>
+          </div>
+          
+          <div className="panel-content">
+            {currentSelectedLocation && (
               <div className="target-location">
                 <h4>Selected Location</h4>
                 <div className="target-info">
@@ -462,61 +176,92 @@ function App() {
                   {findingSimilar ? 'Finding Similar...' : 'Find Similar Locations'}
                 </button>
               </div>
-              
-              {showSimilarResults && (
-                <div className="similar-results">
-                  <h4>Most Similar Locations</h4>
-                  <div className="similar-list">
-                    {findingSimilar ? (
-                      <div className="loading-similar">
-                        <div className="spinner"></div>
-                        <p>Analyzing embeddings...</p>
-                      </div>
-                    ) : (
-                      similarResults.map((location, index) => {
-                        const similarity = (location.similarity_score * 100).toFixed(1);
-                        const imageUrl = getStaticMapImage(location.longitude, location.latitude, 320, 320);
-                        const desc = `#${index + 1} ${location.city}, ${location.country}${location.date ? ` (${location.date})` : ''}`;
-                        
-                        return (
-                          <div 
-                            key={location.id}
-                            className="similar-item" 
-                            onClick={() => zoomToLocation(location.longitude, location.latitude, location.id)}
-                          >
-                            <div 
-                              className="similar-item-image" 
-                              style={{backgroundImage: `url('${imageUrl}')`}}
-                            >
-                              <div className="static-tile-border"></div>
-                              <div className="similarity-badge">{similarity}%</div>
-                              <div className="similar-item-overlay auto-height-gradient">
-                                <span className="similar-item-desc">{desc}</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
+            )}
+            
+            {showSimilarResults && (
+              <div className="similar-results">
+                <h4>Most Similar Locations</h4>
+                <div className="similar-list">
+                  {findingSimilar ? (
+                    <div className="loading-similar">
+                      <div className="spinner"></div>
+                      <p>Analyzing embeddings...</p>
+                    </div>
+                  ) : (
+                    similarResults.map((location, index) => {
+                      const similarity = (location.similarity_score * 100).toFixed(1);
+                      const desc = `#${index + 1} ${location.city}, ${location.country}${location.date ? ` (${location.date})` : ''}`;
+                      
+                      return (
+                        <div 
+                          key={location.id}
+                          className="similar-item-text" 
+                          onClick={() => {
+                            if (!showUMap) {
+                              // Handle map zoom in MapView component
+                              window.dispatchEvent(new CustomEvent('zoomToLocation', {
+                                detail: { longitude: location.longitude, latitude: location.latitude, id: location.id }
+                              }));
+                            } else {
+                              // Handle UMAP highlight
+                              window.dispatchEvent(new CustomEvent('highlightUmapPoint', {
+                                detail: { locationId: location.id }
+                              }));
+                            }
+                          }}
+                        >
+                          <div className="similarity-badge">{similarity}%</div>
+                          <div className="location-desc">{desc}</div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
-              )}
+              </div>
+            )}
+
+            {!currentSelectedLocation && (
+              <div className="no-selection">
+                <p>Click on a location to view details and find similar places.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Content Area */}
+        <div className="content-area">
+          {loading && (
+            <div className="loading-indicator">
+              <div className="spinner"></div>
+              <p>Loading locations...</p>
             </div>
-          </div>
-        )}
+          )}
 
-        {loading && (
-          <div className="loading-indicator">
-            <div className="spinner"></div>
-            <p>Loading locations...</p>
-          </div>
-        )}
+          {error && (
+            <div className="error-indicator">
+              <p>{error}</p>
+            </div>
+          )}
 
-        {error && (
-          <div className="error-indicator">
-            <p>{error}</p>
-          </div>
-        )}
+          {!loading && !error && (
+            <>
+              {!showUMap ? (
+                <MapView
+                  locations={locations}
+                  selectedLocations={selectedLocations}
+                  onLocationSelect={handleLocationSelect}
+                  mapboxToken={mapboxToken}
+                />
+              ) : (
+                <UMapView
+                  locations={locations}
+                  selectedLocations={selectedLocations}
+                  onLocationSelect={handleLocationSelect}
+                />
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -5,6 +5,9 @@ from database import load_embeddings_from_db
 from models import LocationData
 import numpy as np
 from typing import List
+import umap
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 app = FastAPI(title="Embeddings Explorer", version="1.0.0")
 
@@ -21,8 +24,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global variable to store loaded data
+# Global variables to store loaded data
 embeddings_data = None
+umap_cache = None
+executor = ThreadPoolExecutor(max_workers=2)
 
 @app.on_event("startup")
 async def startup_event():
@@ -168,3 +173,102 @@ async def find_similar_locations(location_id: int, top_k: int = 5):
         "target_location_id": location_id,
         "similar_locations": similar_locations
     }
+
+def compute_umap_embeddings(embeddings_array):
+    """Compute UMAP embeddings in a separate thread"""
+    print("Computing UMAP embeddings...")
+    
+    # Configure UMAP for large datasets
+    n_samples = len(embeddings_array)
+    
+    # Adaptive parameters based on dataset size
+    if n_samples > 10000:
+        n_neighbors = min(50, n_samples // 100)
+        min_dist = 0.5
+    elif n_samples > 5000:
+        n_neighbors = min(30, n_samples // 50)
+        min_dist = 0.3
+    else:
+        n_neighbors = min(15, max(5, n_samples // 20))
+        min_dist = 0.1
+    
+    print(f"UMAP parameters: n_neighbors={n_neighbors}, min_dist={min_dist}")
+    
+    # Create UMAP reducer
+    reducer = umap.UMAP(
+        n_components=2,
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+        metric='cosine',
+        random_state=42,
+        verbose=True
+    )
+    
+    # Fit and transform the embeddings
+    umap_embeddings = reducer.fit_transform(embeddings_array)
+    
+    print("UMAP computation completed")
+    return umap_embeddings
+
+@app.get("/api/umap")
+async def get_umap_embeddings():
+    """Get UMAP 2D embeddings for all locations"""
+    global umap_cache
+    
+    if embeddings_data is None:
+        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    
+    # Return cached result if available
+    if umap_cache is not None:
+        print("Returning cached UMAP data")
+        return umap_cache
+    
+    try:
+        print("Computing UMAP embeddings asynchronously...")
+        
+        # Convert embeddings to numpy array if needed
+        embeddings_array = np.array(embeddings_data['embeddings'])
+        
+        # Run UMAP computation in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        umap_embeddings = await loop.run_in_executor(
+            executor, 
+            compute_umap_embeddings, 
+            embeddings_array
+        )
+        
+        # Format response data
+        umap_points = []
+        for i in range(len(umap_embeddings)):
+            geom = embeddings_data['geometries'][i]
+            umap_points.append({
+                "location_id": i,
+                "x": float(umap_embeddings[i][0]),
+                "y": float(umap_embeddings[i][1]),
+                "city": embeddings_data['cities'][i],
+                "country": embeddings_data['countries'][i],
+                "continent": embeddings_data['continents'][i],
+                "longitude": geom.x,
+                "latitude": geom.y,
+                "date": str(embeddings_data['dates'][i]) if embeddings_data['dates'][i] else None
+            })
+        
+        umap_cache = {
+            "umap_points": umap_points,
+            "total_points": len(umap_points),
+            "embedding_dimension": embeddings_array.shape[1]
+        }
+        
+        print(f"UMAP computation successful: {len(umap_points)} points")
+        return umap_cache
+        
+    except Exception as e:
+        print(f"Error computing UMAP: {str(e)}")
+        import traceback
+        print("Detailed error:")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to compute UMAP embeddings: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
