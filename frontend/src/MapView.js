@@ -1,12 +1,14 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 
-const TILE_SIZE_METERS = 1120;
+// Correct tile size: 224 pixels × 10m/pixel = 2240 meters
+const TILE_SIZE_METERS = 2240;
 
 const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const hoveredLocationId = useRef(null);
+  const currentPopup = useRef(null); // Track current popup
 
   // Initialize map
   useEffect(() => {
@@ -30,6 +32,19 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
       }
     });
 
+    // Close popup when clicking on map (not on a feature)
+    map.current.on('click', (e) => {
+      // Only close popup if not clicking on a feature
+      const features = map.current.queryRenderedFeatures(e.point, {
+        layers: ['tiles-fill', 'points-layer']
+      });
+      
+      if (features.length === 0 && currentPopup.current) {
+        currentPopup.current.remove();
+        currentPopup.current = null;
+      }
+    });
+
     // Listen for zoom events from similarity panel
     const handleZoomToLocation = (event) => {
       const { longitude, latitude, id } = event.detail;
@@ -40,6 +55,9 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
 
     return () => {
       window.removeEventListener('zoomToLocation', handleZoomToLocation);
+      if (currentPopup.current) {
+        currentPopup.current.remove();
+      }
       if (map.current) {
         map.current.remove();
         map.current = null;
@@ -265,7 +283,7 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
   const zoomToLocation = (longitude, latitude, locationId) => {
     map.current.flyTo({
       center: [longitude, latitude],
-      zoom: 15,
+      zoom: 13.3,
       duration: 1000
     });
 
@@ -278,6 +296,12 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
   };
 
   const showLocationPopup = (coordinates, properties) => {
+    // Close existing popup
+    if (currentPopup.current) {
+      currentPopup.current.remove();
+      currentPopup.current = null;
+    }
+
     const isSelected = selectedLocations.has(properties.id);
     const popupHtml = `
       <div class="popup-content">
@@ -297,14 +321,21 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
       </div>
     `;
 
-    new mapboxgl.Popup({
+    // Create new popup with smaller size and less intrusive styling
+    currentPopup.current = new mapboxgl.Popup({
       closeButton: true,
-      closeOnClick: true,
-      focusAfterOpen: false
+      closeOnClick: false, // We handle this manually
+      focusAfterOpen: false,
+      maxWidth: '220px' // Make it smaller
     })
       .setLngLat(coordinates)
       .setHTML(popupHtml)
       .addTo(map.current);
+
+    // Clear reference when popup is closed
+    currentPopup.current.on('close', () => {
+      currentPopup.current = null;
+    });
   };
 
   return <div ref={mapContainer} className="map-view" />;

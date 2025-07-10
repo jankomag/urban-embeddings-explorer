@@ -9,7 +9,8 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
   ? 'https://your-domain.com'
   : 'http://localhost:8000';
 
-const TILE_SIZE_METERS = 1120;
+// Correct tile size: 224 pixels × 10m/pixel = 2240 meters
+const TILE_SIZE_METERS = 2240;
 
 function App() {
   // State management
@@ -25,6 +26,7 @@ function App() {
   const [mapboxToken, setMapboxToken] = useState('');
   const [showUMap, setShowUMap] = useState(false);
   const [visibleSimilarCount, setVisibleSimilarCount] = useState(6);
+  const [stats, setStats] = useState(null);
 
   // Initialize app
   useEffect(() => {
@@ -59,8 +61,9 @@ function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/stats`);
       if (!response.ok) throw new Error('Failed to load stats');
-      const stats = await response.json();
-      setTotalLocations(stats.total_locations.toLocaleString());
+      const statsData = await response.json();
+      setStats(statsData);
+      setTotalLocations(statsData.total_locations.toLocaleString());
     } catch (error) {
       console.error('Error loading stats:', error);
       setTotalLocations('Error loading');
@@ -114,13 +117,18 @@ function App() {
     setVisibleSimilarCount(6);
 
     try {
+      console.log(`Finding similar locations for ${locationId}`);
+      
       const response = await fetch(`${API_BASE_URL}/api/similarity/${locationId}?top_k=20`);
-      if (!response.ok) throw new Error('Failed to find similar locations');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to find similar locations');
+      }
       const data = await response.json();
       setSimilarResults(data.similar_locations);
     } catch (error) {
       console.error('Error finding similar locations:', error);
-      setError('Error finding similar locations');
+      setError(`Error finding similar locations: ${error.message}`);
     } finally {
       setFindingSimilar(false);
     }
@@ -181,6 +189,11 @@ function App() {
         <div className="controls-header">
           <div className="stats">
             <span>{totalLocations}</span> locations
+            {stats && (
+              <span className="embedding-stats">
+                • {stats.embedding_dimension}D TerraMind Embeddings
+              </span>
+            )}
           </div>
           <div className="view-controls">
             <button 
@@ -221,12 +234,12 @@ function App() {
               <div className="target-location">
                 <h4>{currentSelectedLocation?.city}, {currentSelectedLocation?.country}</h4>
                 
-                {/* Selected Location Image - Small and Centered */}
+                {/* Selected Location Image */}
                 {mapboxToken && (
                   <div className="selected-image-container">
                     <div className="selected-image-square">
                       <img
-                        src={getStaticMapImage(currentSelectedLocation.longitude, currentSelectedLocation.latitude, 120, 120)}
+                        src={getStaticMapImage(currentSelectedLocation.longitude, currentSelectedLocation.latitude, 120, 120, 11.2)}
                         alt={`${currentSelectedLocation.city} satellite view`}
                         className="selected-location-image"
                         onError={(e) => {
@@ -242,6 +255,9 @@ function App() {
             {(showSimilarResults || findingSimilar) && (
               <div className="similar-results">
                 <h4>Most Similar Locations</h4>
+                <div className="similarity-method-info">
+                  Using TerraMind embeddings • Cosine similarity
+                </div>
                 
                 {findingSimilar ? (
                   <div className="loading-similar">
@@ -262,7 +278,7 @@ function App() {
                           >
                             {mapboxToken && (
                               <img
-                                src={getStaticMapImage(location.longitude, location.latitude, 160, 160, 13.3)}
+                                src={getStaticMapImage(location.longitude, location.latitude, 160, 160, 11.3)}
                                 alt={`${location.city} satellite view`}
                                 className="similar-tile-image"
                                 onError={(e) => {
@@ -270,11 +286,9 @@ function App() {
                                 }}
                               />
                             )}
-                            <div className="tile-overlay">
-                              <div className="similarity-badge">{similarity}%</div>
-                              <div className="tile-text">
-                                {location.city}, {location.country}
-                              </div>
+                            <div className="similarity-badge">{similarity}%</div>
+                            <div className="tile-text">
+                              {location.city}, {location.country}
                             </div>
                           </div>
                         );
@@ -297,6 +311,10 @@ function App() {
             {!currentSelectedLocation && (
               <div className="no-selection">
                 <p>Click on a location to view details and find similar places.</p>
+                <div className="embedding-info">
+                  <h5>TerraMind Embeddings</h5>
+                  <p>Using AI-powered satellite image embeddings to find visually similar urban areas based on spatial patterns, building density, and urban morphology.</p>
+                </div>
               </div>
             )}
           </div>
@@ -314,6 +332,9 @@ function App() {
           {error && (
             <div className="error-indicator">
               <p>{error}</p>
+              <button onClick={() => window.location.reload()} className="retry-btn">
+                Retry
+              </button>
             </div>
           )}
 

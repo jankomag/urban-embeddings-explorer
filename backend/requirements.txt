@@ -1,8 +1,8 @@
 fastapi==0.104.1
 uvicorn==0.24.0
 python-dotenv==1.0.0
-sqlalchemy==2.0.23
-shapely==2.0.2
 numpy==1.24.3
 umap-learn==0.5.4
-psycopg2-binary==2.9.9
+geopandas==0.14.1
+pandas==2.1.3
+pyarrow==14.0.1

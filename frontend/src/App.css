@@ -44,6 +44,12 @@ header h1 {
   opacity: 0.9;
 }
 
+.embedding-stats {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  margin-left: 0.5rem;
+}
+
 .view-controls {
   display: flex;
   gap: 0.5rem;
@@ -135,7 +141,7 @@ header h1 {
   gap: 1rem;
 }
 
-/* Target Location Section - Minimal */
+/* Target Location Section */
 .target-location {
   padding: 1rem;
   background: white;
@@ -152,7 +158,7 @@ header h1 {
   font-weight: 600;
 }
 
-/* Selected Location Image - Small and Simple */
+/* Selected Location Image */
 .selected-image-container {
   display: flex;
   justify-content: center;
@@ -160,11 +166,10 @@ header h1 {
 }
 
 .selected-image-square {
-  /* width: 80px; */
-  /* height: 80px; */
-  border-radius: 6px;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 
 .selected-location-image {
@@ -174,7 +179,7 @@ header h1 {
   display: block;
 }
 
-/* Similar Results Section - Most Space */
+/* Similar Results Section */
 .similar-results {
   flex: 1;
   display: flex;
@@ -194,7 +199,17 @@ header h1 {
   text-align: center;
 }
 
-/* Two Column Grid - FIXED */
+.similarity-method-info {
+  font-size: 0.8rem;
+  color: #666;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  background: #f8f9fa;
+  border-radius: 4px;
+  text-align: center;
+}
+
+/* Two Column Grid */
 .similar-grid-container {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -223,22 +238,10 @@ header h1 {
   display: block;
 }
 
-.tile-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(transparent 50%, rgba(0,0,0,0.8) 100%);
-  pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 6px;
-}
-
 .similarity-badge {
-  align-self: flex-end;
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
   background: rgba(78, 205, 196, 0.9);
   color: white;
   padding: 0.2rem 0.4rem;
@@ -249,6 +252,10 @@ header h1 {
 }
 
 .tile-text {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
   background: rgba(0, 0, 0, 0.8);
   color: white;
   padding: 0.4rem 0.3rem;
@@ -288,7 +295,26 @@ header h1 {
   text-align: center;
   padding: 2rem;
   color: #999;
-  font-style: italic;
+}
+
+.embedding-info {
+  background: #f8f9fa;
+  padding: 1rem;
+  border-radius: 6px;
+  margin-top: 1rem;
+}
+
+.embedding-info h5 {
+  margin: 0 0 0.5rem 0;
+  color: #2c3e50;
+  font-size: 0.9rem;
+}
+
+.embedding-info p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #666;
+  line-height: 1.4;
 }
 
 /* Content Area */
@@ -450,11 +476,6 @@ header h1 {
   .left-panel {
     width: 320px;
   }
-  
-  .selected-image-square {
-    width: 70px;
-    height: 70px;
-  }
 }
 
 @media (max-width: 768px) {
@@ -475,11 +496,6 @@ header h1 {
   .target-location,
   .similar-results {
     padding: 0.75rem;
-  }
-  
-  .selected-image-square {
-    width: 60px;
-    height: 60px;
   }
   
   .tile-text {
@@ -519,11 +535,6 @@ header h1 {
     padding: 0.5rem;
   }
   
-  .selected-image-square {
-    width: 50px;
-    height: 50px;
-  }
-  
   .tile-text {
     font-size: 0.6rem;
     padding: 0.25rem;
@@ -533,4 +544,47 @@ header h1 {
     font-size: 0.6rem;
     padding: 0.15rem 0.25rem;
   }
+}
+
+.umap-plot {
+  position: relative;
+  overflow: hidden;
+}
+
+.umap-point {
+  transition: all 0.15s ease;
+}
+
+.umap-point:hover {
+  filter: brightness(1.1);
+}
+
+.zoom-btn:hover rect {
+  fill: rgba(255, 255, 255, 1) !important;
+  stroke: #4ecdc4 !important;
+}
+
+.zoom-btn:hover text {
+  fill: #4ecdc4 !important;
+}
+
+.legend-item {
+  transition: opacity 0.2s ease;
+}
+
+.legend-item:hover {
+  opacity: 0.7;
+}
+
+.umap-plot svg {
+  cursor: grab;
+}
+
+.umap-plot svg:active {
+  cursor: grabbing;
+}
+
+.umap-tooltip {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.4;
 }
