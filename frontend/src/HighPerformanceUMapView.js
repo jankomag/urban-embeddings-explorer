@@ -242,6 +242,9 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
       
       lastMousePosRef.current = currentPos;
       
+      // Set grabbing cursor during drag
+      canvas.style.cursor = 'grabbing';
+      
       // Throttled redraw during drag
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
@@ -258,7 +261,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     // Store mouse position for potential drag start
     lastMousePosRef.current = currentPos;
     
-    // Find closest point by checking distance to all points (more reliable than quadtree for transformed coordinates)
+    // Find closest point by checking distance to all points
     let closestPoint = null;
     let minDistance = 15; // 15px search radius
     
@@ -278,6 +281,13 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
           closestPoint = point;
         }
       });
+    }
+    
+    // Update cursor based on hover state
+    if (closestPoint) {
+      canvas.style.cursor = 'pointer'; // Indicate clickable
+    } else {
+      canvas.style.cursor = 'grab'; // Default pan cursor
     }
     
     const newHoveredId = closestPoint ? closestPoint.location_id : null;
@@ -311,17 +321,12 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
-    
-    // Change cursor to indicate dragging
-    if (canvasRef.current) {
-      canvasRef.current.style.cursor = 'grabbing';
-    }
+    // Cursor will be set to 'grabbing' in mousemove handler
   }, []);
 
   const handleMouseUp = useCallback(() => {
     isDraggingRef.current = false;
-    
-    // Reset cursor
+    // Reset cursor - will be updated in next mousemove
     if (canvasRef.current) {
       canvasRef.current.style.cursor = 'grab';
     }
