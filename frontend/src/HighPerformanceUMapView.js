@@ -71,15 +71,25 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     }
   }, [locations]);
 
-  // Listen for highlight events
+  // Listen for highlight events and zoom events
   useEffect(() => {
     const handleHighlightPoint = (event) => {
       const { locationId } = event.detail;
       highlightPoint(locationId);
     };
 
+    const handleZoomToPoint = (event) => {
+      const { locationId } = event.detail;
+      zoomToPoint(locationId);
+    };
+
     window.addEventListener('highlightUmapPoint', handleHighlightPoint);
-    return () => window.removeEventListener('highlightUmapPoint', handleHighlightPoint);
+    window.addEventListener('zoomToUmapPoint', handleZoomToPoint);
+    
+    return () => {
+      window.removeEventListener('highlightUmapPoint', handleHighlightPoint);
+      window.removeEventListener('zoomToUmapPoint', handleZoomToPoint);
+    };
   }, [umapData]);
 
   const fetchUmapData = async () => {
@@ -536,6 +546,45 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
       }
     };
   }, [umapData, dimensions, selectedLocations, handleMouseMove, handleMouseDown, handleMouseUp, handleWheel, handleClick, buildQuadtree, renderPoints, rebuildQuadtree]);
+
+  const zoomToPoint = (locationId) => {
+    if (!umapData || !scalesRef.current.xScale) return;
+
+    const targetPoint = umapData.umap_points.find(p => p.location_id === locationId);
+    if (!targetPoint) return;
+
+    const { xScale, yScale } = scalesRef.current;
+    const targetX = xScale(targetPoint.x);
+    const targetY = yScale(targetPoint.y);
+
+    // Calculate transform to center the point
+    const centerX = dimensions.width / 2;
+    const centerY = dimensions.height / 2;
+    
+    // Maintain current zoom level but center on the point
+    const currentScale = transformRef.current.k;
+    transformRef.current.x = centerX - targetX * currentScale;
+    transformRef.current.y = centerY - targetY * currentScale;
+
+    // Smooth animation to new position
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      
+      // Highlight the target point temporarily
+      hoveredPointRef.current = locationId;
+      
+      renderPoints(ctx, umapData.umap_points, transformRef.current);
+      
+      // Reset highlight after animation
+      setTimeout(() => {
+        if (hoveredPointRef.current === locationId) {
+          hoveredPointRef.current = null;
+          renderPoints(ctx, umapData.umap_points, transformRef.current);
+        }
+      }, 1500);
+    }
+  };
 
   const highlightPoint = (locationId) => {
     if (!canvasRef.current || !umapData) return;

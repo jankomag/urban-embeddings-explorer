@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
-import './ModernApp.css'; // Import the new modern styles
+import './ModernApp.css';
 import MapView from './MapView';
 import HighPerformanceUMapView from './HighPerformanceUMapView';
 import polyline from '@mapbox/polyline';
@@ -11,11 +11,297 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
 
 const TILE_SIZE_METERS = 2240;
 
+// Enhanced Similarity Panel Component
+function EnhancedSimilarityPanel({ 
+  selectedLocation, 
+  primarySelectionId, 
+  similarResults, 
+  setSimilarResults,
+  findingSimilar, 
+  setFindingSimilar,
+  visibleSimilarCount,
+  setVisibleSimilarCount,
+  onNavigationClick,
+  mapboxToken,
+  locations
+}) {
+  const [similarityMethods, setSimilarityMethods] = useState([]);
+  const [selectedMethod, setSelectedMethod] = useState('attention_weighted');
+  const [methodsLoading, setMethodsLoading] = useState(true);
+  const [currentMethodConfig, setCurrentMethodConfig] = useState(null);
+
+  // Load similarity methods on component mount
+  useEffect(() => {
+    const loadSimilarityMethods = async () => {
+      try {
+        setMethodsLoading(true);
+        const response = await fetch(`${API_BASE_URL}/api/similarity-methods`);
+        if (response.ok) {
+          const data = await response.json();
+          setSimilarityMethods(data.methods);
+          setSelectedMethod(data.recommended);
+          
+          // Find the recommended method config
+          const recommendedMethod = data.methods.find(m => m.id === data.recommended);
+          if (recommendedMethod) {
+            setCurrentMethodConfig(recommendedMethod.config);
+          }
+        } else {
+          console.error('Failed to load similarity methods');
+        }
+      } catch (error) {
+        console.error('Error loading similarity methods:', error);
+      } finally {
+        setMethodsLoading(false);
+      }
+    };
+
+    loadSimilarityMethods();
+  }, []);
+
+  // Find similar locations with selected method
+  const findSimilarLocations = async (locationId, method) => {
+    console.log('Finding similar locations for:', locationId, 'using method:', method);
+    setFindingSimilar(true);
+    setVisibleSimilarCount(8);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/similarity/${locationId}?top_k=20&method=${method}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to find similar locations');
+      }
+      const data = await response.json();
+      console.log('Found similar locations:', data.similar_locations.length);
+      setSimilarResults(data.similar_locations);
+      
+      // Update current method config
+      if (data.method_config) {
+        setCurrentMethodConfig(data.method_config);
+      }
+    } catch (error) {
+      console.error('Error finding similar locations:', error);
+    } finally {
+      setFindingSimilar(false);
+    }
+  };
+
+  // Handle method change
+  const handleMethodChange = (newMethod) => {
+    setSelectedMethod(newMethod);
+    
+    // Update method config display
+    const methodInfo = similarityMethods.find(m => m.id === newMethod);
+    if (methodInfo) {
+      setCurrentMethodConfig(methodInfo.config);
+    }
+    
+    // Re-run similarity search if we have a primary selection
+    if (primarySelectionId) {
+      findSimilarLocations(primarySelectionId, newMethod);
+    }
+  };
+
+  // Get method indicator color based on speed
+  const getMethodColor = (speed) => {
+    switch (speed) {
+      case 'Fast': return '#10b981'; // green
+      case 'Medium': return '#f59e0b'; // yellow
+      case 'Slow': return '#ef4444'; // red
+      default: return '#6b7280'; // gray
+    }
+  };
+
+  const getStaticMapImage = (longitude, latitude, width = 120, height = 120, zoom = 11.3) => {
+    if (!mapboxToken || !longitude || !latitude) {
+      return '';
+    }
+    
+    try {
+      const imageUrl = `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${longitude},${latitude},${zoom}/${width}x${height}@2x?access_token=${mapboxToken}`;
+      return imageUrl;
+    } catch (error) {
+      console.error('Error generating static map image:', error);
+      return '';
+    }
+  };
+
+  const showMoreSimilar = () => {
+    setVisibleSimilarCount(prev => Math.min(prev + 8, similarResults.length));
+  };
+
+  // Effect to find similar locations when primary selection changes
+  useEffect(() => {
+    if (primarySelectionId && selectedMethod && !methodsLoading) {
+      findSimilarLocations(primarySelectionId, selectedMethod);
+    }
+  }, [primarySelectionId, selectedMethod, methodsLoading]);
+
+  if (!selectedLocation && !primarySelectionId) {
+    return (
+      <div className="empty-state">
+        <p>Click any location to explore similarities</p>
+        <div className="empty-info">
+          <h5>AI-Powered Analysis</h5>
+          <p>Using TerraMind satellite embeddings to find visually similar urban areas based on spatial patterns and building density.</p>
+          {!methodsLoading && similarityMethods.length > 0 && (
+            <div className="method-preview">
+              <small>Available methods: {similarityMethods.length}</small>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* Selected Location Card */}
+      {selectedLocation && (
+        <div className="selected-card">
+          <h4>{selectedLocation.city}, {selectedLocation.country}</h4>
+          {mapboxToken && selectedLocation && (
+            <img
+              src={getStaticMapImage(selectedLocation.longitude, selectedLocation.latitude, 160, 160, 11.2)}
+              alt={`${selectedLocation.city} satellite view`}
+              className="selected-image"
+              onError={(e) => {
+                e.target.style.display = 'none';
+              }}
+            />
+          )}
+          <div className="selected-meta">
+            {selectedLocation.continent}
+            {selectedLocation.date && ` • ${selectedLocation.date}`}
+          </div>
+        </div>
+      )}
+
+      {/* Similar Results - only show if we have a primary selection */}
+      {primarySelectionId && (
+        <div className="similar-section">
+          <div className="similar-header">
+            <h4>
+              Similar to {locations.find(l => l.id === primarySelectionId)?.city || 'Selected Location'}
+            </h4>
+            {similarResults.length > 0 && (
+              <div className="similar-count">
+                {Math.min(visibleSimilarCount, similarResults.length)} of {similarResults.length}
+              </div>
+            )}
+          </div>
+          
+          {/* Similarity Method Selector */}
+          {!methodsLoading && similarityMethods.length > 0 && (
+            <div className="method-selector">
+              <label className="method-label">Similarity Method:</label>
+              <select 
+                value={selectedMethod} 
+                onChange={(e) => handleMethodChange(e.target.value)}
+                className="method-dropdown"
+                disabled={findingSimilar}
+              >
+                {similarityMethods.map((method) => (
+                  <option key={method.id} value={method.id}>
+                    {method.config.name}
+                  </option>
+                ))}
+              </select>
+              
+              {/* Method Info Display */}
+              {currentMethodConfig && (
+                <div className="method-info">
+                  <div className="method-badges">
+                    <span 
+                      className="method-badge speed-badge"
+                      style={{ backgroundColor: getMethodColor(currentMethodConfig.speed) }}
+                    >
+                      {currentMethodConfig.speed}
+                    </span>
+                    <span className="method-badge quality-badge">
+                      {currentMethodConfig.quality} Quality
+                    </span>
+                  </div>
+                  <p className="method-description">
+                    {currentMethodConfig.description}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {findingSimilar ? (
+            <div className="loading-state">
+              <div className="spinner"></div>
+              <div className="loading-text">
+                Finding similar locations using {currentMethodConfig?.name || selectedMethod}...
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="similarity-grid">
+                {similarResults.slice(0, visibleSimilarCount).map((location, index) => {
+                  const similarity = (location.similarity_score * 100).toFixed(1);
+                  const imageUrl = getStaticMapImage(location.longitude, location.latitude, 120, 120, 11.3);
+                  
+                  return (
+                    <div 
+                      key={`${location.id}-${index}`}
+                      className="similarity-tile"
+                      onClick={() => onNavigationClick(location)}
+                      title={`${location.city}, ${location.country} - ${similarity}% similar`}
+                    >
+                      {mapboxToken && imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt={`${location.city} satellite view`}
+                          className="similarity-image"
+                          onError={(e) => {
+                            e.target.parentElement.innerHTML = `
+                              <div class="loading-placeholder">
+                                <div>${location.city}</div>
+                              </div>
+                              <div class="similarity-score">${similarity}%</div>
+                              <div class="similarity-label">${location.city}, ${location.country}</div>
+                            `;
+                          }}
+                        />
+                      ) : (
+                        <div className="loading-placeholder">
+                          {location.city}
+                        </div>
+                      )}
+                      <div className="similarity-score">{similarity}%</div>
+                      <div className="similarity-label">
+                        {location.city}, {location.country}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              
+              {visibleSimilarCount < similarResults.length && (
+                <button 
+                  className="show-more"
+                  onClick={showMoreSimilar}
+                >
+                  Show {Math.min(8, similarResults.length - visibleSimilarCount)} more
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function ModernApp() {
   // State management
   const [locations, setLocations] = useState([]);
   const [selectedLocations, setSelectedLocations] = useState(new Set());
   const [currentSelectedLocation, setCurrentSelectedLocation] = useState(null);
+  const [primarySelectionId, setPrimarySelectionId] = useState(null);
   const [similarResults, setSimilarResults] = useState([]);
   const [findingSimilar, setFindingSimilar] = useState(false);
   const [totalLocations, setTotalLocations] = useState('Loading...');
@@ -110,7 +396,7 @@ function ModernApp() {
       const tilePath = `path-3+ffffff-0.90(${urlEncodedPolyline})`;
       
       const imageUrl = `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${tilePath}/${longitude},${latitude},${zoom}/${width}x${height}@2x?access_token=${mapboxToken}`;
-      console.log('Generated image URL for', longitude, latitude); // Debug log
+      console.log('Generated image URL for', longitude, latitude);
       return imageUrl;
     } catch (error) {
       console.error('Error generating static map image:', error);
@@ -118,67 +404,60 @@ function ModernApp() {
     }
   };
 
-  const findSimilarLocations = async (locationId) => {
-    console.log('Finding similar locations for:', locationId); // Debug log
-    setFindingSimilar(true);
-    setVisibleSimilarCount(8);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/similarity/${locationId}?top_k=20`);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to find similar locations');
-      }
-      const data = await response.json();
-      console.log('Found similar locations:', data.similar_locations.length); // Debug log
-      setSimilarResults(data.similar_locations);
-    } catch (error) {
-      console.error('Error finding similar locations:', error);
-      setError(`Error finding similar locations: ${error.message}`);
-    } finally {
-      setFindingSimilar(false);
-    }
-  };
-
   const clearSelection = () => {
     setSelectedLocations(new Set());
     setCurrentSelectedLocation(null);
+    setPrimarySelectionId(null);
     setSimilarResults([]);
     setVisibleSimilarCount(8);
   };
 
-  const handleLocationSelect = (locationId) => {
-    console.log('Selecting location:', locationId); // Debug log
+  // Primary selection - triggers similarity search and UMAP centering
+  const handlePrimarySelection = (locationId) => {
+    console.log('Primary selection:', locationId);
     
     const newSelected = new Set();
     let newCurrentLocation = null;
 
-    // Always select the new location (don't toggle)
+    // Always select the new location
     newSelected.add(locationId);
     newCurrentLocation = locations.find(loc => loc.id === locationId);
     
-    console.log('Found location:', newCurrentLocation); // Debug log
-
     setSelectedLocations(newSelected);
     setCurrentSelectedLocation(newCurrentLocation);
+    setPrimarySelectionId(locationId);
     
     if (newCurrentLocation) {
-      findSimilarLocations(locationId);
+      // Clear previous results - the similarity panel will handle finding new ones
+      setSimilarResults([]);
+      setVisibleSimilarCount(8);
+      
+      // Center UMAP on this point
+      window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
+        detail: { locationId: locationId }
+      }));
     } else {
       setSimilarResults([]);
       setVisibleSimilarCount(8);
     }
   };
 
-  const handleSimilarClick = (location) => {
-    // Select the similar location
-    handleLocationSelect(location.id);
+  // Navigation only - just moves views without changing primary selection
+  const handleNavigationClick = (location) => {
+    console.log('Navigation to:', location.city, location.country);
     
-    // Also trigger map/umap interactions
+    // Update visual selection but don't change the primary selection for similarities
+    const newSelected = new Set();
+    newSelected.add(location.id);
+    setSelectedLocations(newSelected);
+    setCurrentSelectedLocation(location);
+    // Note: Don't change primarySelectionId or clear similarResults
+    
+    // Move both map and UMAP to show this location
     window.dispatchEvent(new CustomEvent('zoomToLocation', {
       detail: { longitude: location.longitude, latitude: location.latitude, id: location.id }
     }));
-    window.dispatchEvent(new CustomEvent('highlightUmapPoint', {
+    window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
       detail: { locationId: location.id }
     }));
   };
@@ -213,13 +492,15 @@ function ModernApp() {
 
   return (
     <div className="app">
-      {/* Compact Header */}
+      {/* Enhanced Header */}
       <header className="header">
         <div className="header-content">
           <div>
-            <h1>🛰️ Satellite Embeddings Explorer</h1>
+            <h1>🛰️ Enhanced Satellite Embeddings Explorer</h1>
             <div className="header-stats">
               {totalLocations} locations • {stats?.embedding_dimension}D TerraMind embeddings
+              {stats?.available_similarity_methods && ` • ${stats.available_similarity_methods} similarity methods`}
+              {stats?.locations_with_full_patches && ` • ${stats.locations_with_full_patches} with full patches`}
             </div>
           </div>
           <div className="selection-info">
@@ -247,7 +528,7 @@ function ModernApp() {
             <MapView
               locations={locations}
               selectedLocations={selectedLocations}
-              onLocationSelect={handleLocationSelect}
+              onLocationSelect={handlePrimarySelection}
               mapboxToken={mapboxToken}
             />
           </div>
@@ -263,130 +544,30 @@ function ModernApp() {
             <HighPerformanceUMapView
               locations={locations}
               selectedLocations={selectedLocations}
-              onLocationSelect={handleLocationSelect}
+              onLocationSelect={handlePrimarySelection}
             />
           </div>
         </div>
 
-        {/* Analysis Panel */}
+        {/* Enhanced Analysis Panel */}
         <div className="analysis-panel">
           <div className="analysis-header">
-            <h3>Analysis</h3>
+            <h3>Enhanced Analysis</h3>
           </div>
           <div className="analysis-content">
-            {currentSelectedLocation ? (
-              <>
-                {/* Selected Location Card */}
-                <div className="selected-card">
-                  <h4>{currentSelectedLocation.city}, {currentSelectedLocation.country}</h4>
-                  {mapboxToken && currentSelectedLocation && (
-                    <img
-                      src={getStaticMapImage(currentSelectedLocation.longitude, currentSelectedLocation.latitude, 160, 160, 11.2)}
-                      alt={`${currentSelectedLocation.city} satellite view`}
-                      className="selected-image"
-                      onError={(e) => {
-                        console.log('Failed to load selected image for:', currentSelectedLocation.city);
-                        e.target.style.display = 'none';
-                      }}
-                      onLoad={(e) => {
-                        console.log('Successfully loaded selected image for:', currentSelectedLocation.city);
-                      }}
-                    />
-                  )}
-                  <div className="selected-meta">
-                    {currentSelectedLocation.continent}
-                    {currentSelectedLocation.date && ` • ${currentSelectedLocation.date}`}
-                  </div>
-                </div>
-
-                {/* Similar Results */}
-                <div className="similar-section">
-                  <div className="similar-header">
-                    <h4>Similar Locations</h4>
-                    {similarResults.length > 0 && (
-                      <div className="similar-count">
-                        {Math.min(visibleSimilarCount, similarResults.length)} of {similarResults.length}
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div className="similar-method">
-                    TerraMind embeddings • Cosine similarity
-                  </div>
-                  
-                  {findingSimilar ? (
-                    <div className="loading-state">
-                      <div className="spinner"></div>
-                      <div className="loading-text">Finding similar locations...</div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="similarity-grid">
-                        {similarResults.slice(0, visibleSimilarCount).map((location, index) => {
-                          const similarity = (location.similarity_score * 100).toFixed(1);
-                          const imageUrl = getStaticMapImage(location.longitude, location.latitude, 120, 120, 11.3);
-                          
-                          return (
-                            <div 
-                              key={`${location.id}-${index}`}
-                              className="similarity-tile"
-                              onClick={() => handleSimilarClick(location)}
-                              title={`${location.city}, ${location.country} - ${similarity}% similar`}
-                            >
-                              {mapboxToken && imageUrl ? (
-                                <img
-                                  src={imageUrl}
-                                  alt={`${location.city} satellite view`}
-                                  className="similarity-image"
-                                  onError={(e) => {
-                                    console.log('Failed to load similar image for:', location.city);
-                                    e.target.parentElement.innerHTML = `
-                                      <div class="loading-placeholder">
-                                        <div>${location.city}</div>
-                                      </div>
-                                      <div class="similarity-score">${similarity}%</div>
-                                      <div class="similarity-label">${location.city}, ${location.country}</div>
-                                    `;
-                                  }}
-                                  onLoad={(e) => {
-                                    console.log('Successfully loaded similar image for:', location.city);
-                                  }}
-                                />
-                              ) : (
-                                <div className="loading-placeholder">
-                                  {location.city}
-                                </div>
-                              )}
-                              <div className="similarity-score">{similarity}%</div>
-                              <div className="similarity-label">
-                                {location.city}, {location.country}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      
-                      {visibleSimilarCount < similarResults.length && (
-                        <button 
-                          className="show-more"
-                          onClick={showMoreSimilar}
-                        >
-                          Show {Math.min(8, similarResults.length - visibleSimilarCount)} more
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="empty-state">
-                <p>Click any location to explore similarities</p>
-                <div className="empty-info">
-                  <h5>AI-Powered Analysis</h5>
-                  <p>Using TerraMind satellite embeddings to find visually similar urban areas based on spatial patterns and building density.</p>
-                </div>
-              </div>
-            )}
+            <EnhancedSimilarityPanel
+              selectedLocation={currentSelectedLocation}
+              primarySelectionId={primarySelectionId}
+              similarResults={similarResults}
+              setSimilarResults={setSimilarResults}
+              findingSimilar={findingSimilar}
+              setFindingSimilar={setFindingSimilar}
+              visibleSimilarCount={visibleSimilarCount}
+              setVisibleSimilarCount={setVisibleSimilarCount}
+              onNavigationClick={handleNavigationClick}
+              mapboxToken={mapboxToken}
+              locations={locations}
+            />
           </div>
         </div>
       </div>

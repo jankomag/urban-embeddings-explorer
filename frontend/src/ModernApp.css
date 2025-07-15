@@ -509,3 +509,361 @@
   .similarity-grid::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
   }
+
+  /* Enhanced CSS additions for similarity method selector */
+
+/* Method Selector Styles */
+.method-selector {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.method-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+
+.method-dropdown {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: white;
+  font-size: 10px;
+  color: #374151;
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.method-dropdown:hover:not(:disabled) {
+  border-color: #3b82f6;
+}
+
+.method-dropdown:disabled {
+  background: #f3f4f6;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.method-dropdown:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+/* Method Info Display */
+.method-info {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.method-badges {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.method-badge {
+  display: inline-block;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 600;
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.speed-badge {
+  /* Color set dynamically via JavaScript */
+}
+
+.quality-badge {
+  background: #6366f1;
+}
+
+.method-description {
+  font-size: 8px;
+  color: #6b7280;
+  line-height: 1.3;
+  margin: 0;
+}
+
+/* Enhanced Similar Section */
+.similar-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.similar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.similar-header h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.similar-count {
+  font-size: 9px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* Enhanced Loading State */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+}
+
+.loading-text {
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 8px;
+}
+
+/* Similarity Grid Enhancements */
+.similarity-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.similarity-tile {
+  position: relative;
+  aspect-ratio: 1;
+  cursor: pointer;
+  border-radius: 3px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  border: 1px solid #e2e8f0;
+}
+
+.similarity-tile:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  border-color: #3b82f6;
+}
+
+.similarity-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #f1f5f9;
+}
+
+.similarity-score {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: rgba(59, 130, 246, 0.9);
+  color: white;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 8px;
+  font-weight: 600;
+  backdrop-filter: blur(4px);
+}
+
+.similarity-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.8));
+  color: white;
+  padding: 8px 4px 4px;
+  font-size: 8px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.loading-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 8px;
+}
+
+.show-more {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  margin-top: 8px;
+  width: 100%;
+  transition: background 0.2s ease;
+}
+
+.show-more:hover {
+  background: #2563eb;
+}
+
+/* Enhanced Empty State */
+.empty-state {
+  text-align: center;
+  padding: 20px;
+  color: #64748b;
+}
+
+.empty-state p {
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.empty-info {
+  background: #f8fafc;
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+.empty-info h5 {
+  font-size: 10px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 4px;
+}
+
+.empty-info p {
+  font-size: 9px;
+  color: #64748b;
+  line-height: 1.3;
+}
+
+.method-preview {
+  margin-top: 8px;
+  padding: 4px 8px;
+  background: #e0f2fe;
+  border-radius: 3px;
+}
+
+.method-preview small {
+  font-size: 8px;
+  color: #0369a1;
+  font-weight: 500;
+}
+
+/* Enhanced Selected Card */
+.selected-card {
+  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.selected-card h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.selected-image {
+  width: 80px;
+  height: 80px;
+  border-radius: 4px;
+  object-fit: cover;
+  margin: 0 auto 6px;
+  display: block;
+  border: 1px solid #e2e8f0;
+  background: #f1f5f9;
+}
+
+.selected-meta {
+  font-size: 9px;
+  color: #64748b;
+}
+
+/* Enhanced Header Stats */
+.header-stats {
+  font-size: 11px;
+  opacity: 0.9;
+  font-weight: 400;
+}
+
+/* Responsive Design for Method Selector */
+@media (max-width: 768px) {
+  .method-selector {
+    padding: 6px;
+  }
+  
+  .method-dropdown {
+    font-size: 9px;
+  }
+  
+  .method-badges {
+    flex-wrap: wrap;
+  }
+  
+  .method-badge {
+    font-size: 7px;
+  }
+  
+  .method-description {
+    font-size: 7px;
+  }
+}
+
+/* Animation for method switching */
+.similarity-grid {
+  transition: opacity 0.2s ease;
+}
+
+.similarity-grid.loading {
+  opacity: 0.5;
+}
+
+/* Enhanced tooltip styling for method info */
+.method-dropdown option {
+  padding: 4px;
+  font-size: 10px;
+}
+
+/* Focus states for accessibility */
+.method-dropdown:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}
+
+.similarity-tile:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}
+
+.show-more:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 1px;
+}
