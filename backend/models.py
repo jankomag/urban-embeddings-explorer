@@ -47,11 +47,20 @@ class SimilarityMethodsResponse(BaseModel):
     fastest: str
     best_quality: str
 
+class PaginationInfo(BaseModel):
+    offset: int
+    limit: int
+    total_results: int
+    has_more: bool
+    next_offset: Optional[int]
+    returned_count: int
+
 class EnhancedSimilarityResponse(BaseModel):
     target_location_id: int
     similar_locations: List[SimilarLocation]
     method_used: str
     method_config: SimilarityMethodConfig
+    pagination: PaginationInfo
 
 class UMapPoint(BaseModel):
     location_id: int
@@ -87,3 +96,4 @@ class TileBoundsResponse(BaseModel):
     country: str
     tile_bounds: Optional[List[List[float]]]
     has_exact_bounds: bool
+    

@@ -19,8 +19,6 @@ function EnhancedSimilarityPanel({
   setSimilarResults,
   findingSimilar, 
   setFindingSimilar,
-  visibleSimilarCount,
-  setVisibleSimilarCount,
   onNavigationClick,
   mapboxToken,
   locations
@@ -29,6 +27,8 @@ function EnhancedSimilarityPanel({
   const [selectedMethod, setSelectedMethod] = useState('attention_weighted');
   const [methodsLoading, setMethodsLoading] = useState(true);
   const [currentMethodConfig, setCurrentMethodConfig] = useState(null);
+  const [paginationInfo, setPaginationInfo] = useState(null);
+  const [loadingMoreResults, setLoadingMoreResults] = useState(false);
 
   // Load similarity methods on component mount
   useEffect(() => {
@@ -59,21 +59,36 @@ function EnhancedSimilarityPanel({
     loadSimilarityMethods();
   }, []);
 
-  // Find similar locations with selected method
-  const findSimilarLocations = async (locationId, method) => {
-    console.log('Finding similar locations for:', locationId, 'using method:', method);
-    setFindingSimilar(true);
-    setVisibleSimilarCount(8);
+  // Find similar locations with selected method (initial load)
+  const findSimilarLocations = async (locationId, method, offset = 0, limit = 6) => {
+    console.log('Finding similar locations for:', locationId, 'using method:', method, 'offset:', offset);
+    
+    if (offset === 0) {
+      setFindingSimilar(true);
+      setSimilarResults([]); // Clear previous results for new search
+      setPaginationInfo(null);
+    } else {
+      setLoadingMoreResults(true);
+    }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/similarity/${locationId}?top_k=20&method=${method}`);
+      const response = await fetch(`${API_BASE_URL}/api/similarity/${locationId}?offset=${offset}&limit=${limit}&method=${method}`);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to find similar locations');
       }
       const data = await response.json();
-      console.log('Found similar locations:', data.similar_locations.length);
-      setSimilarResults(data.similar_locations);
+      console.log('Found similar locations:', data.similar_locations.length, 'offset:', offset);
+      
+      if (offset === 0) {
+        // Initial load - replace results
+        setSimilarResults(data.similar_locations);
+      } else {
+        // Load more - append results
+        setSimilarResults(prev => [...prev, ...data.similar_locations]);
+      }
+      
+      setPaginationInfo(data.pagination);
       
       // Update current method config
       if (data.method_config) {
@@ -81,8 +96,24 @@ function EnhancedSimilarityPanel({
       }
     } catch (error) {
       console.error('Error finding similar locations:', error);
+      // Show error state but don't clear existing results if loading more
+      if (offset === 0) {
+        setSimilarResults([]);
+        setPaginationInfo(null);
+      }
     } finally {
-      setFindingSimilar(false);
+      if (offset === 0) {
+        setFindingSimilar(false);
+      } else {
+        setLoadingMoreResults(false);
+      }
+    }
+  };
+
+  // Load more similar locations
+  const loadMoreSimilarLocations = () => {
+    if (paginationInfo && paginationInfo.has_more && primarySelectionId && selectedMethod) {
+      findSimilarLocations(primarySelectionId, selectedMethod, paginationInfo.next_offset, 6);
     }
   };
 
@@ -96,9 +127,9 @@ function EnhancedSimilarityPanel({
       setCurrentMethodConfig(methodInfo.config);
     }
     
-    // Re-run similarity search if we have a primary selection
+    // Re-run similarity search if we have a primary selection (start fresh)
     if (primarySelectionId) {
-      findSimilarLocations(primarySelectionId, newMethod);
+      findSimilarLocations(primarySelectionId, newMethod, 0, 6);
     }
   };
 
@@ -126,14 +157,10 @@ function EnhancedSimilarityPanel({
     }
   };
 
-  const showMoreSimilar = () => {
-    setVisibleSimilarCount(prev => Math.min(prev + 8, similarResults.length));
-  };
-
   // Effect to find similar locations when primary selection changes
   useEffect(() => {
     if (primarySelectionId && selectedMethod && !methodsLoading) {
-      findSimilarLocations(primarySelectionId, selectedMethod);
+      findSimilarLocations(primarySelectionId, selectedMethod, 0, 6);
     }
   }, [primarySelectionId, selectedMethod, methodsLoading]);
 
@@ -184,9 +211,9 @@ function EnhancedSimilarityPanel({
             <h4>
               Similar to {locations.find(l => l.id === primarySelectionId)?.city || 'Selected Location'}
             </h4>
-            {similarResults.length > 0 && (
+            {paginationInfo && (
               <div className="similar-count">
-                {Math.min(visibleSimilarCount, similarResults.length)} of {similarResults.length}
+                {similarResults.length} of {paginationInfo.total_results}
               </div>
             )}
           </div>
@@ -234,13 +261,21 @@ function EnhancedSimilarityPanel({
             <div className="loading-state">
               <div className="spinner"></div>
               <div className="loading-text">
-                Finding similar locations using {currentMethodConfig?.name || selectedMethod}...
+                {currentMethodConfig?.speed === 'Slow' 
+                  ? `Computing visual similarities using ${currentMethodConfig?.name}... This may take a moment for best quality results.`
+                  : `Finding similar locations using ${currentMethodConfig?.name || selectedMethod}...`
+                }
               </div>
+              {currentMethodConfig?.speed === 'Slow' && (
+                <div className="loading-subtext">
+                  💡 High-quality methods analyze all 196 image patches for the best visual similarity
+                </div>
+              )}
             </div>
           ) : (
             <>
               <div className="similarity-grid">
-                {similarResults.slice(0, visibleSimilarCount).map((location, index) => {
+                {similarResults.map((location, index) => {
                   const similarity = (location.similarity_score * 100).toFixed(1);
                   const imageUrl = getStaticMapImage(location.longitude, location.latitude, 120, 120, 11.3);
                   
@@ -280,13 +315,29 @@ function EnhancedSimilarityPanel({
                 })}
               </div>
               
-              {visibleSimilarCount < similarResults.length && (
+              {/* Load More Button */}
+              {paginationInfo && paginationInfo.has_more && (
                 <button 
                   className="show-more"
-                  onClick={showMoreSimilar}
+                  onClick={loadMoreSimilarLocations}
+                  disabled={loadingMoreResults}
                 >
-                  Show {Math.min(8, similarResults.length - visibleSimilarCount)} more
+                  {loadingMoreResults ? (
+                    <>
+                      <div className="button-spinner"></div>
+                      Loading more...
+                    </>
+                  ) : (
+                    <>Show {Math.min(6, paginationInfo.total_results - similarResults.length)} more</>
+                  )}
                 </button>
+              )}
+              
+              {/* Results Summary */}
+              {paginationInfo && !paginationInfo.has_more && similarResults.length > 6 && (
+                <div className="results-summary">
+                  Showing all {similarResults.length} results using {currentMethodConfig?.name}
+                </div>
               )}
             </>
           )}
@@ -308,7 +359,6 @@ function ModernApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mapboxToken, setMapboxToken] = useState('');
-  const [visibleSimilarCount, setVisibleSimilarCount] = useState(8);
   const [stats, setStats] = useState(null);
 
   // Initialize app
@@ -409,7 +459,6 @@ function ModernApp() {
     setCurrentSelectedLocation(null);
     setPrimarySelectionId(null);
     setSimilarResults([]);
-    setVisibleSimilarCount(8);
   };
 
   // Primary selection - triggers similarity search and UMAP centering
@@ -430,7 +479,6 @@ function ModernApp() {
     if (newCurrentLocation) {
       // Clear previous results - the similarity panel will handle finding new ones
       setSimilarResults([]);
-      setVisibleSimilarCount(8);
       
       // Center UMAP on this point
       window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
@@ -438,7 +486,6 @@ function ModernApp() {
       }));
     } else {
       setSimilarResults([]);
-      setVisibleSimilarCount(8);
     }
   };
 
@@ -460,10 +507,6 @@ function ModernApp() {
     window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
       detail: { locationId: location.id }
     }));
-  };
-
-  const showMoreSimilar = () => {
-    setVisibleSimilarCount(prev => Math.min(prev + 8, similarResults.length));
   };
 
   if (loading) {
@@ -562,8 +605,6 @@ function ModernApp() {
               setSimilarResults={setSimilarResults}
               findingSimilar={findingSimilar}
               setFindingSimilar={setFindingSimilar}
-              visibleSimilarCount={visibleSimilarCount}
-              setVisibleSimilarCount={setVisibleSimilarCount}
               onNavigationClick={handleNavigationClick}
               mapboxToken={mapboxToken}
               locations={locations}

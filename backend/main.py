@@ -39,6 +39,7 @@ app.add_middleware(
 embeddings_data = None
 umap_cache = None
 aggregated_cache = {}  # Cache for on-demand aggregated embeddings
+similarity_results_cache = {}  # Cache for complete similarity results
 executor = ThreadPoolExecutor(max_workers=2)
 
 # Similarity method definitions
@@ -438,10 +439,11 @@ async def get_similarity_methods():
 @app.get("/api/similarity/{location_id}", response_model=EnhancedSimilarityResponse)
 async def find_similar_locations(
     location_id: int, 
-    top_k: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+    limit: int = Query(6, ge=1, le=20, description="Number of results to return"),
     method: SimilarityMethod = Query(SimilarityMethod.ATTENTION_WEIGHTED, description="Similarity calculation method")
 ):
-    """Find most similar locations using specified method"""
+    """Find most similar locations using specified method with pagination"""
     if embeddings_data is None:
         raise HTTPException(status_code=503, detail="Embeddings data not loaded")
     
@@ -456,27 +458,45 @@ async def find_similar_locations(
     if target_location is None:
         raise HTTPException(status_code=404, detail="Location not found")
     
-    # Calculate similarities
-    similarities = []
+    # Check if we have cached similarities for this location and method
+    cache_key = f"{location_id}_{method.value}"
+    cached_similarities = similarity_results_cache.get(cache_key)
     
-    for location in embeddings_data['locations']:
-        if location['id'] == location_id:
-            continue  # Skip target location
-            
-        try:
-            similarity = calculate_similarity_by_method(location_id, location['id'], method)
-            similarities.append((location, similarity))
-        except Exception as e:
-            print(f"Error calculating similarity for location {location['id']}: {e}")
-            continue
+    if cached_similarities is None:
+        print(f"Computing similarities for location {location_id} using {method.value}...")
+        
+        # Calculate similarities for all locations
+        similarities = []
+        
+        for location in embeddings_data['locations']:
+            if location['id'] == location_id:
+                continue  # Skip target location
+                
+            try:
+                similarity = calculate_similarity_by_method(location_id, location['id'], method)
+                similarities.append((location, similarity))
+            except Exception as e:
+                print(f"Error calculating similarity for location {location['id']}: {e}")
+                continue
+        
+        # Sort by similarity (highest first)
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        
+        # Cache the complete sorted results
+        similarity_results_cache[cache_key] = similarities
+        print(f"Cached {len(similarities)} similarity results for location {location_id}")
+        
+        cached_similarities = similarities
+    else:
+        print(f"Using cached similarities for location {location_id} using {method.value}")
     
-    # Sort by similarity and get top-k
-    similarities.sort(key=lambda x: x[1], reverse=True)
-    top_similar = similarities[:top_k]
+    # Apply pagination
+    total_results = len(cached_similarities)
+    paginated_similarities = cached_similarities[offset:offset + limit]
     
     # Format response
     similar_locations = []
-    for location, sim_score in top_similar:
+    for location, sim_score in paginated_similarities:
         # Validate coordinates before adding to response
         if not is_valid_coordinate(location['longitude'], location['latitude']):
             continue
@@ -495,11 +515,23 @@ async def find_similar_locations(
     
     method_config = SIMILARITY_CONFIGS[method]
     
+    # Add pagination metadata
+    has_more = (offset + limit) < total_results
+    next_offset = offset + limit if has_more else None
+    
     return {
         "target_location_id": location_id,
         "similar_locations": similar_locations,
         "method_used": method.value,
-        "method_config": method_config
+        "method_config": method_config,
+        "pagination": {
+            "offset": offset,
+            "limit": limit,
+            "total_results": total_results,
+            "has_more": has_more,
+            "next_offset": next_offset,
+            "returned_count": len(similar_locations)
+        }
     }
 
 @app.get("/api/locations", response_model=List[LocationData])
