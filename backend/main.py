@@ -20,7 +20,7 @@ from enum import Enum
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Simplified Embeddings Explorer", version="3.1.0")
+app = FastAPI(title="Enhanced Embeddings Explorer", version="3.2.0")
 
 # Add CORS middleware
 app.add_middleware(
@@ -42,26 +42,36 @@ aggregated_cache = {}  # Cache for on-demand aggregated embeddings
 similarity_results_cache = {}  # Cache for complete similarity results
 executor = ThreadPoolExecutor(max_workers=2)
 
-# Similarity method definitions
+# Enhanced similarity methods - add new ones to your existing enum
 class SimilarityMethod(str, Enum):
-    SIMPLE_COSINE = "simple_cosine"           # Fast: Mean-aggregated on-demand
-    ATTENTION_WEIGHTED = "attention_weighted"  # Medium: Better visual features
-    SPATIAL_PYRAMID = "spatial_pyramid"       # Medium: Preserves spatial structure  
-    PATCH_CHAMFER = "patch_chamfer"           # Slow: Best visual similarity
-    PATCH_HAUSDORFF = "patch_hausdorff"       # Slow: Robust visual similarity
-    SPATIAL_AWARE = "spatial_aware"           # Medium: Spatial + visual balance
+    # Original methods
+    SIMPLE_COSINE = "simple_cosine"           
+    ATTENTION_WEIGHTED = "attention_weighted"  
+    SPATIAL_PYRAMID = "spatial_pyramid"       
+    PATCH_CHAMFER = "patch_chamfer"           
+    PATCH_HAUSDORFF = "patch_hausdorff"       
+    SPATIAL_AWARE = "spatial_aware"           
+    
+    # Enhanced methods for better visual discrimination
+    EUCLIDEAN_DISTANCE = "euclidean_distance"      # Often better than cosine
+    CONTRASTIVE_COSINE = "contrastive_cosine"      # Subtract dataset mean first  
+    NORMALIZED_PATCHES = "normalized_patches"       # Normalize each patch individually
+    TOP_K_PATCHES = "top_k_patches"                # Focus on most distinctive patches
+    PATCH_VARIANCE = "patch_variance"              # Weight by patch variance
+    HYBRID_DISTANCE = "hybrid_distance"            # Combine multiple metrics
 
-# Similarity method configurations
+# Enhanced similarity method configurations
 SIMILARITY_CONFIGS = {
+    # Original methods
     SimilarityMethod.SIMPLE_COSINE: {
         "name": "Simple Cosine (Fast)",
         "description": "Mean-aggregated embeddings with cosine similarity",
         "speed": "Fast",
         "quality": "Medium",
-        "requires_full_patches": False  # We compute on-demand
+        "requires_full_patches": False
     },
     SimilarityMethod.ATTENTION_WEIGHTED: {
-        "name": "Attention Weighted (Recommended)",
+        "name": "Attention Weighted",
         "description": "Emphasizes visually important patches using attention mechanism",
         "speed": "Medium",
         "quality": "High",
@@ -75,7 +85,7 @@ SIMILARITY_CONFIGS = {
         "requires_full_patches": True
     },
     SimilarityMethod.PATCH_CHAMFER: {
-        "name": "Patch-Level Chamfer (Best Visual)",
+        "name": "Patch-Level Chamfer",
         "description": "Robust patch-level comparison using Chamfer distance",
         "speed": "Slow",
         "quality": "Highest",
@@ -94,8 +104,227 @@ SIMILARITY_CONFIGS = {
         "speed": "Medium",
         "quality": "High",
         "requires_full_patches": True
+    },
+    
+    # Enhanced methods for better visual discrimination
+    SimilarityMethod.EUCLIDEAN_DISTANCE: {
+        "name": "Euclidean Distance (Recommended for Visual)",
+        "description": "Uses Euclidean distance instead of cosine similarity - often better for visual similarity",
+        "speed": "Fast",
+        "quality": "High",
+        "requires_full_patches": True
+    },
+    SimilarityMethod.CONTRASTIVE_COSINE: {
+        "name": "Contrastive Cosine (Best Discrimination)",
+        "description": "Subtracts dataset mean before cosine similarity - eliminates common 'urban' signal",
+        "speed": "Fast", 
+        "quality": "Very High",
+        "requires_full_patches": True
+    },
+    SimilarityMethod.NORMALIZED_PATCHES: {
+        "name": "Normalized Patches",
+        "description": "Normalizes each patch individually before aggregation",
+        "speed": "Medium",
+        "quality": "High",
+        "requires_full_patches": True
+    },
+    SimilarityMethod.TOP_K_PATCHES: {
+        "name": "Top-K Patches",
+        "description": "Focuses only on most distinctive patches (buildings, roads, etc.)",
+        "speed": "Medium",
+        "quality": "Very High",
+        "requires_full_patches": True
+    },
+    SimilarityMethod.PATCH_VARIANCE: {
+        "name": "Variance Weighted",
+        "description": "Weights patches by their variance - emphasizes diverse features",
+        "speed": "Medium",
+        "quality": "High",
+        "requires_full_patches": True
+    },
+    SimilarityMethod.HYBRID_DISTANCE: {
+        "name": "Hybrid Distance (Most Robust)",
+        "description": "Combines cosine, Euclidean, and Manhattan distances",
+        "speed": "Medium",
+        "quality": "Highest",
+        "requires_full_patches": True
     }
 }
+
+# Global variables for enhanced methods
+dataset_mean_embedding = None
+dataset_std_embedding = None
+
+def compute_dataset_statistics(embeddings_data):
+    """Compute dataset-wide statistics for contrastive methods."""
+    global dataset_mean_embedding, dataset_std_embedding
+    
+    print("🧮 Computing dataset statistics for enhanced similarity...")
+    
+    all_embeddings = []
+    for location_id, embedding_info in embeddings_data['embeddings_dict'].items():
+        if 'patch_embeddings_full' in embedding_info:
+            patches = np.array(embedding_info['patch_embeddings_full']).reshape(196, 768)
+            mean_emb = patches.mean(axis=0)
+            all_embeddings.append(mean_emb)
+    
+    if len(all_embeddings) > 0:
+        embeddings_matrix = np.array(all_embeddings)
+        dataset_mean_embedding = embeddings_matrix.mean(axis=0)
+        dataset_std_embedding = embeddings_matrix.std(axis=0)
+        
+        # Calculate some diagnostic stats
+        mean_magnitude = np.linalg.norm(dataset_mean_embedding)
+        avg_deviation = np.mean([np.linalg.norm(emb - dataset_mean_embedding) for emb in all_embeddings])
+        
+        print(f"✅ Computed dataset statistics from {len(all_embeddings)} embeddings")
+        print(f"   Dataset mean magnitude: {mean_magnitude:.3f}")
+        print(f"   Average deviation from mean: {avg_deviation:.3f}")
+        print(f"   Ratio (higher = better discrimination): {avg_deviation/mean_magnitude:.3f}")
+        
+        # If ratio is low, contrastive methods will help a lot
+        if avg_deviation/mean_magnitude < 0.1:
+            print("   🎯 Low ratio detected - contrastive methods will significantly improve discrimination!")
+        
+        return True
+    else:
+        print("❌ No embeddings found for statistics computation")
+        return False
+
+def calculate_enhanced_similarity(target_location_id: int, candidate_location_id: int, 
+                                method: str, embeddings_data) -> float:
+    """Enhanced similarity methods that better capture visual differences."""
+    
+    try:
+        target_patches = np.array(embeddings_data['embeddings_dict'][target_location_id]['patch_embeddings_full']).reshape(196, 768)
+        candidate_patches = np.array(embeddings_data['embeddings_dict'][candidate_location_id]['patch_embeddings_full']).reshape(196, 768)
+    except KeyError:
+        return 0.0
+    
+    if method == "euclidean_distance":
+        # Use Euclidean distance instead of cosine similarity
+        target_emb = target_patches.mean(axis=0)
+        candidate_emb = candidate_patches.mean(axis=0)
+        
+        # Euclidean distance
+        distance = np.linalg.norm(target_emb - candidate_emb)
+        
+        # Convert to similarity (normalize by typical distance in dataset)
+        # Typical distance between random embeddings is around sqrt(768) ≈ 27.7
+        max_expected_distance = np.sqrt(768) * 2  # Conservative estimate
+        similarity = max(0, 1 - (distance / max_expected_distance))
+        
+        return similarity
+    
+    elif method == "contrastive_cosine":
+        # Subtract dataset mean before computing cosine similarity
+        if dataset_mean_embedding is None:
+            print("⚠️ Dataset mean not computed, falling back to simple cosine")
+            return 0.5  # Fallback
+        
+        target_emb = target_patches.mean(axis=0) - dataset_mean_embedding
+        candidate_emb = candidate_patches.mean(axis=0) - dataset_mean_embedding
+        
+        # Cosine similarity on centered embeddings
+        dot_product = np.dot(target_emb, candidate_emb)
+        norm_target = np.linalg.norm(target_emb)
+        norm_candidate = np.linalg.norm(candidate_emb)
+        
+        if norm_target == 0 or norm_candidate == 0:
+            return 0.0
+        
+        similarity = dot_product / (norm_target * norm_candidate)
+        # Convert from [-1, 1] to [0, 1]
+        return (similarity + 1) / 2
+    
+    elif method == "normalized_patches":
+        # Normalize each patch individually before aggregating
+        target_normalized = target_patches / (np.linalg.norm(target_patches, axis=1, keepdims=True) + 1e-8)
+        candidate_normalized = candidate_patches / (np.linalg.norm(candidate_patches, axis=1, keepdims=True) + 1e-8)
+        
+        target_emb = target_normalized.mean(axis=0)
+        candidate_emb = candidate_normalized.mean(axis=0)
+        
+        # Cosine similarity
+        dot_product = np.dot(target_emb, candidate_emb)
+        norm_target = np.linalg.norm(target_emb)
+        norm_candidate = np.linalg.norm(candidate_emb)
+        
+        if norm_target == 0 or norm_candidate == 0:
+            return 0.0
+        
+        return dot_product / (norm_target * norm_candidate)
+    
+    elif method == "top_k_patches":
+        # Focus only on the most distinctive patches from each tile
+        k = 32  # Use top 32 patches out of 196
+        
+        # Find most distinctive patches (highest magnitude)
+        target_norms = np.linalg.norm(target_patches, axis=1)
+        candidate_norms = np.linalg.norm(candidate_patches, axis=1)
+        
+        target_top_k = np.argsort(target_norms)[-k:]
+        candidate_top_k = np.argsort(candidate_norms)[-k:]
+        
+        target_emb = target_patches[target_top_k].mean(axis=0)
+        candidate_emb = candidate_patches[candidate_top_k].mean(axis=0)
+        
+        # Cosine similarity
+        dot_product = np.dot(target_emb, candidate_emb)
+        norm_target = np.linalg.norm(target_emb)
+        norm_candidate = np.linalg.norm(candidate_emb)
+        
+        if norm_target == 0 or norm_candidate == 0:
+            return 0.0
+        
+        return dot_product / (norm_target * norm_candidate)
+    
+    elif method == "patch_variance":
+        # Weight patches by their variance (high variance = more interesting)
+        target_var = np.var(target_patches, axis=1)
+        candidate_var = np.var(candidate_patches, axis=1)
+        
+        # Normalize weights
+        target_weights = target_var / (target_var.sum() + 1e-8)
+        candidate_weights = candidate_var / (candidate_var.sum() + 1e-8)
+        
+        # Weighted aggregation
+        target_emb = np.sum(target_patches * target_weights.reshape(-1, 1), axis=0)
+        candidate_emb = np.sum(candidate_patches * candidate_weights.reshape(-1, 1), axis=0)
+        
+        # Cosine similarity
+        dot_product = np.dot(target_emb, candidate_emb)
+        norm_target = np.linalg.norm(target_emb)
+        norm_candidate = np.linalg.norm(candidate_emb)
+        
+        if norm_target == 0 or norm_candidate == 0:
+            return 0.0
+        
+        return dot_product / (norm_target * norm_candidate)
+    
+    elif method == "hybrid_distance":
+        # Combine multiple distance metrics
+        target_emb = target_patches.mean(axis=0)
+        candidate_emb = candidate_patches.mean(axis=0)
+        
+        # 1. Cosine similarity
+        cosine_sim = np.dot(target_emb, candidate_emb) / (np.linalg.norm(target_emb) * np.linalg.norm(candidate_emb) + 1e-8)
+        
+        # 2. Euclidean distance (converted to similarity)
+        euclidean_dist = np.linalg.norm(target_emb - candidate_emb)
+        euclidean_sim = max(0, 1 - (euclidean_dist / 30))  # Normalized
+        
+        # 3. Manhattan distance (converted to similarity)
+        manhattan_dist = np.sum(np.abs(target_emb - candidate_emb))
+        manhattan_sim = max(0, 1 - (manhattan_dist / 1000))  # Normalized
+        
+        # Weighted combination
+        hybrid_sim = 0.4 * cosine_sim + 0.4 * euclidean_sim + 0.2 * manhattan_sim
+        
+        return hybrid_sim
+    
+    else:
+        raise ValueError(f"Unknown enhanced method: {method}")
 
 def is_valid_coordinate(lon, lat):
     """Check if coordinates are valid (not NaN, within valid ranges)"""
@@ -212,8 +441,27 @@ def calculate_patch_level_similarity(target_patches: np.ndarray, candidate_patch
         raise ValueError(f"Unknown patch-level method: {method}")
 
 def calculate_similarity_by_method(target_location_id: int, candidate_location_id: int, method: SimilarityMethod) -> float:
-    """Calculate similarity using the specified method."""
+    """Calculate similarity using the specified method - now includes enhanced methods."""
     
+    # Check if it's an enhanced method
+    enhanced_methods = [
+        SimilarityMethod.EUCLIDEAN_DISTANCE,
+        SimilarityMethod.CONTRASTIVE_COSINE, 
+        SimilarityMethod.NORMALIZED_PATCHES,
+        SimilarityMethod.TOP_K_PATCHES,
+        SimilarityMethod.PATCH_VARIANCE,
+        SimilarityMethod.HYBRID_DISTANCE
+    ]
+    
+    if method in enhanced_methods:
+        try:
+            return calculate_enhanced_similarity(target_location_id, candidate_location_id, method.value, embeddings_data)
+        except Exception as e:
+            print(f"Error in enhanced method {method.value}: {e}")
+            # Fallback to simple cosine
+            return calculate_similarity_by_method(target_location_id, candidate_location_id, SimilarityMethod.SIMPLE_COSINE)
+    
+    # Original methods (unchanged)
     if method == SimilarityMethod.SIMPLE_COSINE:
         # Use mean-aggregated embeddings computed on-demand
         try:
@@ -411,6 +659,10 @@ async def startup_event():
         print("Loading embeddings data from files...")
         embeddings_data = load_embeddings_from_files()
         print(f"Successfully loaded {len(embeddings_data['locations'])} locations")
+        
+        # Compute dataset statistics for enhanced methods
+        compute_dataset_statistics(embeddings_data)
+        
     except Exception as e:
         print(f"Error loading embeddings: {str(e)}")
         embeddings_data = None
@@ -418,7 +670,7 @@ async def startup_event():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"message": "Simplified Embeddings Explorer API v3.1", "status": "running"}
+    return {"message": "Enhanced Embeddings Explorer API v3.2", "status": "running", "enhanced_methods": True}
 
 @app.get("/api/similarity-methods", response_model=SimilarityMethodsResponse)
 async def get_similarity_methods():
@@ -431,9 +683,9 @@ async def get_similarity_methods():
             }
             for method, config in SIMILARITY_CONFIGS.items()
         ],
-        "recommended": SimilarityMethod.ATTENTION_WEIGHTED.value,
+        "recommended": SimilarityMethod.CONTRASTIVE_COSINE.value,  # Updated recommendation
         "fastest": SimilarityMethod.SIMPLE_COSINE.value,
-        "best_quality": SimilarityMethod.PATCH_CHAMFER.value
+        "best_quality": SimilarityMethod.HYBRID_DISTANCE.value    # Updated best quality
     }
 
 @app.get("/api/similarity/{location_id}", response_model=EnhancedSimilarityResponse)
@@ -441,7 +693,7 @@ async def find_similar_locations(
     location_id: int, 
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     limit: int = Query(6, ge=1, le=20, description="Number of results to return"),
-    method: SimilarityMethod = Query(SimilarityMethod.ATTENTION_WEIGHTED, description="Similarity calculation method")
+    method: SimilarityMethod = Query(SimilarityMethod.CONTRASTIVE_COSINE, description="Similarity calculation method")  # Updated default
 ):
     """Find most similar locations using specified method with pagination"""
     if embeddings_data is None:
@@ -485,6 +737,13 @@ async def find_similar_locations(
         # Cache the complete sorted results
         similarity_results_cache[cache_key] = similarities
         print(f"Cached {len(similarities)} similarity results for location {location_id}")
+        
+        # Print some diagnostics for enhanced methods
+        if similarities:
+            scores = [s[1] for s in similarities]
+            print(f"   📊 Similarity range: {min(scores):.4f} - {max(scores):.4f}")
+            print(f"   📈 Mean similarity: {np.mean(scores):.4f}")
+            print(f"   📏 Std deviation: {np.std(scores):.4f}")
         
         cached_similarities = similarities
     else:
@@ -534,6 +793,7 @@ async def find_similar_locations(
         }
     }
 
+# The rest of your endpoints remain the same...
 @app.get("/api/locations", response_model=List[LocationData])
 async def get_locations():
     """Get all locations with their basic info"""

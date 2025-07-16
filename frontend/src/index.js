@@ -11,7 +11,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
 
 const TILE_SIZE_METERS = 2240;
 
-// Enhanced Similarity Panel Component
+// Enhanced Similarity Panel Component with Request Cancellation
 function EnhancedSimilarityPanel({ 
   selectedLocation, 
   primarySelectionId, 
@@ -29,6 +29,10 @@ function EnhancedSimilarityPanel({
   const [currentMethodConfig, setCurrentMethodConfig] = useState(null);
   const [paginationInfo, setPaginationInfo] = useState(null);
   const [loadingMoreResults, setLoadingMoreResults] = useState(false);
+  
+  // Request cancellation
+  const currentRequestRef = useRef(null);
+  const loadMoreRequestRef = useRef(null);
 
   // Load similarity methods on component mount
   useEffect(() => {
@@ -59,66 +63,127 @@ function EnhancedSimilarityPanel({
     loadSimilarityMethods();
   }, []);
 
-  // Find similar locations with selected method (initial load)
+  // Find similar locations with selected method (initial load) - with request cancellation
   const findSimilarLocations = async (locationId, method, offset = 0, limit = 6) => {
     console.log('Finding similar locations for:', locationId, 'using method:', method, 'offset:', offset);
     
+    // Cancel any existing request for initial loads (not for pagination)
+    if (offset === 0 && currentRequestRef.current) {
+      console.log('🚫 Cancelling previous similarity request');
+      currentRequestRef.current.abort();
+      currentRequestRef.current = null;
+    }
+    
+    // Cancel any existing load more request for pagination
+    if (offset > 0 && loadMoreRequestRef.current) {
+      console.log('🚫 Cancelling previous load more request');
+      loadMoreRequestRef.current.abort();
+      loadMoreRequestRef.current = null;
+    }
+    
+    // Create new AbortController for this request
+    const abortController = new AbortController();
+    
     if (offset === 0) {
+      currentRequestRef.current = abortController;
       setFindingSimilar(true);
       setSimilarResults([]); // Clear previous results for new search
       setPaginationInfo(null);
     } else {
+      loadMoreRequestRef.current = abortController;
       setLoadingMoreResults(true);
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/similarity/${locationId}?offset=${offset}&limit=${limit}&method=${method}`);
+      const response = await fetch(
+        `${API_BASE_URL}/api/similarity/${locationId}?offset=${offset}&limit=${limit}&method=${method}`,
+        { signal: abortController.signal }
+      );
+      
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to find similar locations');
       }
+      
       const data = await response.json();
-      console.log('Found similar locations:', data.similar_locations.length, 'offset:', offset);
+      console.log('✅ Found similar locations:', data.similar_locations.length, 'offset:', offset);
       
-      if (offset === 0) {
-        // Initial load - replace results
-        setSimilarResults(data.similar_locations);
-      } else {
-        // Load more - append results
-        setSimilarResults(prev => [...prev, ...data.similar_locations]);
-      }
-      
-      setPaginationInfo(data.pagination);
-      
-      // Update current method config
-      if (data.method_config) {
-        setCurrentMethodConfig(data.method_config);
+      // Only process results if this request wasn't cancelled
+      if (!abortController.signal.aborted) {
+        if (offset === 0) {
+          // Initial load - replace results
+          setSimilarResults(data.similar_locations);
+        } else {
+          // Load more - append results
+          setSimilarResults(prev => [...prev, ...data.similar_locations]);
+        }
+        
+        setPaginationInfo(data.pagination);
+        
+        // Update current method config
+        if (data.method_config) {
+          setCurrentMethodConfig(data.method_config);
+        }
       }
     } catch (error) {
+      // Don't show error for cancelled requests
+      if (error.name === 'AbortError') {
+        console.log('🔄 Request was cancelled');
+        return;
+      }
+      
       console.error('Error finding similar locations:', error);
-      // Show error state but don't clear existing results if loading more
-      if (offset === 0) {
-        setSimilarResults([]);
-        setPaginationInfo(null);
+      
+      // Only update state if request wasn't cancelled
+      if (!abortController.signal.aborted) {
+        // Show error state but don't clear existing results if loading more
+        if (offset === 0) {
+          setSimilarResults([]);
+          setPaginationInfo(null);
+        }
       }
     } finally {
-      if (offset === 0) {
-        setFindingSimilar(false);
-      } else {
-        setLoadingMoreResults(false);
+      // Only update loading state if request wasn't cancelled
+      if (!abortController.signal.aborted) {
+        if (offset === 0) {
+          setFindingSimilar(false);
+          currentRequestRef.current = null;
+        } else {
+          setLoadingMoreResults(false);
+          loadMoreRequestRef.current = null;
+        }
       }
     }
   };
 
-  // Load more similar locations
+  // Load more similar locations - with cancellation support
   const loadMoreSimilarLocations = () => {
-    if (paginationInfo && paginationInfo.has_more && primarySelectionId && selectedMethod) {
+    if (paginationInfo && paginationInfo.has_more && primarySelectionId && selectedMethod && !loadingMoreResults) {
       findSimilarLocations(primarySelectionId, selectedMethod, paginationInfo.next_offset, 6);
     }
   };
 
-  // Handle method change
+  // Handle method change - with immediate cancellation
   const handleMethodChange = (newMethod) => {
+    console.log('🔄 Method changed to:', newMethod);
+    
+    // Cancel any existing requests immediately
+    if (currentRequestRef.current) {
+      console.log('🚫 Cancelling existing request due to method change');
+      currentRequestRef.current.abort();
+      currentRequestRef.current = null;
+    }
+    
+    if (loadMoreRequestRef.current) {
+      console.log('🚫 Cancelling existing load more request due to method change');
+      loadMoreRequestRef.current.abort();
+      loadMoreRequestRef.current = null;
+    }
+    
+    // Reset loading states
+    setFindingSimilar(false);
+    setLoadingMoreResults(false);
+    
     setSelectedMethod(newMethod);
     
     // Update method config display
@@ -157,12 +222,45 @@ function EnhancedSimilarityPanel({
     }
   };
 
-  // Effect to find similar locations when primary selection changes
+  // Effect to find similar locations when primary selection changes - with cancellation
   useEffect(() => {
     if (primarySelectionId && selectedMethod && !methodsLoading) {
+      console.log('🎯 Primary selection changed to:', primarySelectionId);
+      
+      // Cancel any existing requests when primary selection changes
+      if (currentRequestRef.current) {
+        console.log('🚫 Cancelling existing request due to selection change');
+        currentRequestRef.current.abort();
+        currentRequestRef.current = null;
+      }
+      
+      if (loadMoreRequestRef.current) {
+        console.log('🚫 Cancelling existing load more request due to selection change');
+        loadMoreRequestRef.current.abort();
+        loadMoreRequestRef.current = null;
+      }
+      
+      // Reset states
+      setFindingSimilar(false);
+      setLoadingMoreResults(false);
+      
       findSimilarLocations(primarySelectionId, selectedMethod, 0, 6);
     }
   }, [primarySelectionId, selectedMethod, methodsLoading]);
+  
+  // Cleanup effect to cancel requests on unmount
+  useEffect(() => {
+    return () => {
+      if (currentRequestRef.current) {
+        console.log('🧹 Cleaning up similarity request on unmount');
+        currentRequestRef.current.abort();
+      }
+      if (loadMoreRequestRef.current) {
+        console.log('🧹 Cleaning up load more request on unmount');
+        loadMoreRequestRef.current.abort();
+      }
+    };
+  }, []);
 
   if (!selectedLocation && !primarySelectionId) {
     return (
@@ -189,7 +287,7 @@ function EnhancedSimilarityPanel({
           <h4>{selectedLocation.city}, {selectedLocation.country}</h4>
           {mapboxToken && selectedLocation && (
             <img
-              src={getStaticMapImage(selectedLocation.longitude, selectedLocation.latitude, 160, 160, 11.2)}
+              src={getStaticMapImage(selectedLocation.longitude, selectedLocation.latitude, 200, 200, 11.2)}
               alt={`${selectedLocation.city} satellite view`}
               className="selected-image"
               onError={(e) => {
@@ -201,6 +299,26 @@ function EnhancedSimilarityPanel({
             {selectedLocation.continent}
             {selectedLocation.date && ` • ${selectedLocation.date}`}
           </div>
+          <button 
+            className="zoom-to-location-btn"
+            onClick={() => {
+              // Zoom map to this location
+              window.dispatchEvent(new CustomEvent('zoomToLocation', {
+                detail: { 
+                  longitude: selectedLocation.longitude, 
+                  latitude: selectedLocation.latitude, 
+                  id: selectedLocation.id 
+                }
+              }));
+              // Zoom UMAP to this point
+              window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
+                detail: { locationId: selectedLocation.id }
+              }));
+            }}
+            title="Zoom to this location on map and UMAP"
+          >
+            🎯 Zoom to Location
+          </button>
         </div>
       )}
 
@@ -489,16 +607,13 @@ function ModernApp() {
     }
   };
 
-  // Navigation only - just moves views without changing primary selection
+  // Navigation only - just moves views without changing primary selection or selected card
   const handleNavigationClick = (location) => {
     console.log('Navigation to:', location.city, location.country);
     
-    // Update visual selection but don't change the primary selection for similarities
-    const newSelected = new Set();
-    newSelected.add(location.id);
-    setSelectedLocations(newSelected);
-    setCurrentSelectedLocation(location);
-    // Note: Don't change primarySelectionId or clear similarResults
+    // DON'T update the selected location or visual selection
+    // DON'T change primarySelectionId or clear similarResults
+    // ONLY move the views to show this location
     
     // Move both map and UMAP to show this location
     window.dispatchEvent(new CustomEvent('zoomToLocation', {
