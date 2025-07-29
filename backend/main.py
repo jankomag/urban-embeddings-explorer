@@ -1,26 +1,31 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from dotenv import load_dotenv
-from models import LocationData, EnhancedSimilarityResponse, SimilarityMethodsResponse, EnhancedStatsResponse, ConfigResponse, TileBoundsResponse
-import numpy as np
-from typing import List, Literal
-import umap
+import json
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import geopandas as gpd
-import pandas as pd
-from glob import glob
-from shapely.geometry import Point, Polygon
-import math
-from scipy.spatial.distance import cdist
-from sklearn.metrics.pairwise import cosine_similarity
-from enum import Enum
+import time
+from typing import List, Dict, Optional, Set
+from dotenv import load_dotenv
+from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+import logging
+
+# Import your enhanced models
+from models import (
+    LocationData, SimplifiedSimilarityResponse, SimplifiedStatsResponse, 
+    ConfigResponse, TileBoundsResponse, UMapResponse, SimilarLocation,
+    PaginationInfo, UMapPoint, CityRepresentativesResponse, BoundsStatistics,
+    TileBoundsBatchResponse
+)
 
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Enhanced Embeddings Explorer", version="3.2.0")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Enhanced Satellite Embeddings Explorer - With Exact Bounds", version="3.1.0")
 
 # Add CORS middleware
 app.add_middleware(
@@ -29,995 +34,842 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:3001",
+        "https://localhost:3000",
+        "*"  # Remove in production
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Global variables to store loaded data
-embeddings_data = None
-umap_cache = None
-aggregated_cache = {}  # Cache for on-demand aggregated embeddings
-similarity_results_cache = {}  # Cache for complete similarity results
-executor = ThreadPoolExecutor(max_workers=2)
+# Global variables for lightweight data
+locations_data = None
+umap_data = None
+dataset_stats = None
+city_representatives_data = None
+qdrant_client = None
 
-# Enhanced similarity methods - add new ones to your existing enum
-class SimilarityMethod(str, Enum):
-    # Original methods
-    SIMPLE_COSINE = "simple_cosine"           
-    ATTENTION_WEIGHTED = "attention_weighted"  
-    SPATIAL_PYRAMID = "spatial_pyramid"       
-    PATCH_CHAMFER = "patch_chamfer"           
-    PATCH_HAUSDORFF = "patch_hausdorff"       
-    SPATIAL_AWARE = "spatial_aware"           
-    
-    # Enhanced methods for better visual discrimination
-    EUCLIDEAN_DISTANCE = "euclidean_distance"      # Often better than cosine
-    CONTRASTIVE_COSINE = "contrastive_cosine"      # Subtract dataset mean first  
-    NORMALIZED_PATCHES = "normalized_patches"       # Normalize each patch individually
-    TOP_K_PATCHES = "top_k_patches"                # Focus on most distinctive patches
-    PATCH_VARIANCE = "patch_variance"              # Weight by patch variance
-    HYBRID_DISTANCE = "hybrid_distance"            # Combine multiple metrics
-
-# Enhanced similarity method configurations
-SIMILARITY_CONFIGS = {
-    # Original methods
-    SimilarityMethod.SIMPLE_COSINE: {
-        "name": "Simple Cosine (Fast)",
-        "description": "Mean-aggregated embeddings with cosine similarity",
-        "speed": "Fast",
-        "quality": "Medium",
-        "requires_full_patches": False
-    },
-    SimilarityMethod.ATTENTION_WEIGHTED: {
-        "name": "Attention Weighted",
-        "description": "Emphasizes visually important patches using attention mechanism",
-        "speed": "Medium",
-        "quality": "High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.SPATIAL_PYRAMID: {
-        "name": "Spatial Pyramid",
-        "description": "Preserves spatial structure with multi-scale representation",
-        "speed": "Medium", 
-        "quality": "High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.PATCH_CHAMFER: {
-        "name": "Patch-Level Chamfer",
-        "description": "Robust patch-level comparison using Chamfer distance",
-        "speed": "Slow",
-        "quality": "Highest",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.PATCH_HAUSDORFF: {
-        "name": "Patch-Level Hausdorff",
-        "description": "Strict patch-level comparison using modified Hausdorff distance",
-        "speed": "Slow", 
-        "quality": "Highest",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.SPATIAL_AWARE: {
-        "name": "Spatial Aware",
-        "description": "Balances spatial arrangement and visual features",
-        "speed": "Medium",
-        "quality": "High",
-        "requires_full_patches": True
-    },
-    
-    # Enhanced methods for better visual discrimination
-    SimilarityMethod.EUCLIDEAN_DISTANCE: {
-        "name": "Euclidean Distance (Recommended for Visual)",
-        "description": "Uses Euclidean distance instead of cosine similarity - often better for visual similarity",
-        "speed": "Fast",
-        "quality": "High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.CONTRASTIVE_COSINE: {
-        "name": "Contrastive Cosine (Best Discrimination)",
-        "description": "Subtracts dataset mean before cosine similarity - eliminates common 'urban' signal",
-        "speed": "Fast", 
-        "quality": "Very High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.NORMALIZED_PATCHES: {
-        "name": "Normalized Patches",
-        "description": "Normalizes each patch individually before aggregation",
-        "speed": "Medium",
-        "quality": "High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.TOP_K_PATCHES: {
-        "name": "Top-K Patches",
-        "description": "Focuses only on most distinctive patches (buildings, roads, etc.)",
-        "speed": "Medium",
-        "quality": "Very High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.PATCH_VARIANCE: {
-        "name": "Variance Weighted",
-        "description": "Weights patches by their variance - emphasizes diverse features",
-        "speed": "Medium",
-        "quality": "High",
-        "requires_full_patches": True
-    },
-    SimilarityMethod.HYBRID_DISTANCE: {
-        "name": "Hybrid Distance (Most Robust)",
-        "description": "Combines cosine, Euclidean, and Manhattan distances",
-        "speed": "Medium",
-        "quality": "Highest",
-        "requires_full_patches": True
-    }
+# Qdrant collection names
+COLLECTIONS = {
+    'regular': 'satellite_embeddings_simple',
+    'global_contrastive': 'satellite_embeddings_global_contrastive_simple'
 }
 
-# Global variables for enhanced methods
-dataset_mean_embedding = None
-dataset_std_embedding = None
+# Simple in-memory cache
+similarity_cache = {}
+cache_ttl = 900  # 15 minutes
+max_cache_size = 1000
 
-def compute_dataset_statistics(embeddings_data):
-    """Compute dataset-wide statistics for contrastive methods."""
-    global dataset_mean_embedding, dataset_std_embedding
+class SimilarityCache:
+    def __init__(self, max_size: int = 1000, ttl: int = 900):
+        self.cache = {}
+        self.access_times = {}
+        self.max_size = max_size
+        self.ttl = ttl
     
-    print("🧮 Computing dataset statistics for enhanced similarity...")
+    def get(self, key: str) -> Optional[List]:
+        if key in self.cache:
+            if time.time() - self.access_times[key] > self.ttl:
+                del self.cache[key]
+                del self.access_times[key]
+                return None
+            
+            self.access_times[key] = time.time()
+            return self.cache[key]
+        return None
     
-    all_embeddings = []
-    for location_id, embedding_info in embeddings_data['embeddings_dict'].items():
-        if 'patch_embeddings_full' in embedding_info:
-            patches = np.array(embedding_info['patch_embeddings_full']).reshape(196, 768)
-            mean_emb = patches.mean(axis=0)
-            all_embeddings.append(mean_emb)
+    def set(self, key: str, value: List):
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
+            del self.cache[oldest_key]
+            del self.access_times[oldest_key]
+        
+        self.cache[key] = value
+        self.access_times[key] = time.time()
     
-    if len(all_embeddings) > 0:
-        embeddings_matrix = np.array(all_embeddings)
-        dataset_mean_embedding = embeddings_matrix.mean(axis=0)
-        dataset_std_embedding = embeddings_matrix.std(axis=0)
-        
-        # Calculate some diagnostic stats
-        mean_magnitude = np.linalg.norm(dataset_mean_embedding)
-        avg_deviation = np.mean([np.linalg.norm(emb - dataset_mean_embedding) for emb in all_embeddings])
-        
-        print(f"✅ Computed dataset statistics from {len(all_embeddings)} embeddings")
-        print(f"   Dataset mean magnitude: {mean_magnitude:.3f}")
-        print(f"   Average deviation from mean: {avg_deviation:.3f}")
-        print(f"   Ratio (higher = better discrimination): {avg_deviation/mean_magnitude:.3f}")
-        
-        # If ratio is low, contrastive methods will help a lot
-        if avg_deviation/mean_magnitude < 0.1:
-            print("   🎯 Low ratio detected - contrastive methods will significantly improve discrimination!")
-        
-        return True
-    else:
-        print("❌ No embeddings found for statistics computation")
-        return False
+    def clear(self):
+        self.cache.clear()
+        self.access_times.clear()
 
-def calculate_enhanced_similarity(target_location_id: int, candidate_location_id: int, 
-                                method: str, embeddings_data) -> float:
-    """Enhanced similarity methods that better capture visual differences."""
+# Initialize cache
+similarity_cache = SimilarityCache(max_cache_size, cache_ttl)
+
+def setup_qdrant_client():
+    """Initialize Qdrant client with environment configuration."""
+    qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
+    qdrant_api_key = os.getenv('QDRANT_API_KEY')
     
     try:
-        target_patches = np.array(embeddings_data['embeddings_dict'][target_location_id]['patch_embeddings_full']).reshape(196, 768)
-        candidate_patches = np.array(embeddings_data['embeddings_dict'][candidate_location_id]['patch_embeddings_full']).reshape(196, 768)
-    except KeyError:
-        return 0.0
-    
-    if method == "euclidean_distance":
-        # Use Euclidean distance instead of cosine similarity
-        target_emb = target_patches.mean(axis=0)
-        candidate_emb = candidate_patches.mean(axis=0)
+        client_kwargs = {'url': qdrant_url, 'timeout': 60}
+        if qdrant_api_key and qdrant_api_key != 'your_api_key_if_needed':
+            client_kwargs['api_key'] = qdrant_api_key
         
-        # Euclidean distance
-        distance = np.linalg.norm(target_emb - candidate_emb)
+        client = QdrantClient(**client_kwargs)
         
-        # Convert to similarity (normalize by typical distance in dataset)
-        # Typical distance between random embeddings is around sqrt(768) ≈ 27.7
-        max_expected_distance = np.sqrt(768) * 2  # Conservative estimate
-        similarity = max(0, 1 - (distance / max_expected_distance))
+        # Test connection
+        collections = client.get_collections()
+        available_collection_names = [c.name for c in collections.collections]
         
-        return similarity
-    
-    elif method == "contrastive_cosine":
-        # Subtract dataset mean before computing cosine similarity
-        if dataset_mean_embedding is None:
-            print("⚠️ Dataset mean not computed, falling back to simple cosine")
-            return 0.5  # Fallback
+        logger.info(f"✅ Connected to Qdrant at {qdrant_url}")
+        logger.info(f"📦 Available collections: {available_collection_names}")
         
-        target_emb = target_patches.mean(axis=0) - dataset_mean_embedding
-        candidate_emb = candidate_patches.mean(axis=0) - dataset_mean_embedding
+        for method, collection_name in COLLECTIONS.items():
+            if collection_name in available_collection_names:
+                logger.info(f"✅ Found collection for {method}: {collection_name}")
+            else:
+                logger.warning(f"❌ Missing collection for {method}: {collection_name}")
         
-        # Cosine similarity on centered embeddings
-        dot_product = np.dot(target_emb, candidate_emb)
-        norm_target = np.linalg.norm(target_emb)
-        norm_candidate = np.linalg.norm(candidate_emb)
-        
-        if norm_target == 0 or norm_candidate == 0:
-            return 0.0
-        
-        similarity = dot_product / (norm_target * norm_candidate)
-        # Convert from [-1, 1] to [0, 1]
-        return (similarity + 1) / 2
-    
-    elif method == "normalized_patches":
-        # Normalize each patch individually before aggregating
-        target_normalized = target_patches / (np.linalg.norm(target_patches, axis=1, keepdims=True) + 1e-8)
-        candidate_normalized = candidate_patches / (np.linalg.norm(candidate_patches, axis=1, keepdims=True) + 1e-8)
-        
-        target_emb = target_normalized.mean(axis=0)
-        candidate_emb = candidate_normalized.mean(axis=0)
-        
-        # Cosine similarity
-        dot_product = np.dot(target_emb, candidate_emb)
-        norm_target = np.linalg.norm(target_emb)
-        norm_candidate = np.linalg.norm(candidate_emb)
-        
-        if norm_target == 0 or norm_candidate == 0:
-            return 0.0
-        
-        return dot_product / (norm_target * norm_candidate)
-    
-    elif method == "top_k_patches":
-        # Focus only on the most distinctive patches from each tile
-        k = 32  # Use top 32 patches out of 196
-        
-        # Find most distinctive patches (highest magnitude)
-        target_norms = np.linalg.norm(target_patches, axis=1)
-        candidate_norms = np.linalg.norm(candidate_patches, axis=1)
-        
-        target_top_k = np.argsort(target_norms)[-k:]
-        candidate_top_k = np.argsort(candidate_norms)[-k:]
-        
-        target_emb = target_patches[target_top_k].mean(axis=0)
-        candidate_emb = candidate_patches[candidate_top_k].mean(axis=0)
-        
-        # Cosine similarity
-        dot_product = np.dot(target_emb, candidate_emb)
-        norm_target = np.linalg.norm(target_emb)
-        norm_candidate = np.linalg.norm(candidate_emb)
-        
-        if norm_target == 0 or norm_candidate == 0:
-            return 0.0
-        
-        return dot_product / (norm_target * norm_candidate)
-    
-    elif method == "patch_variance":
-        # Weight patches by their variance (high variance = more interesting)
-        target_var = np.var(target_patches, axis=1)
-        candidate_var = np.var(candidate_patches, axis=1)
-        
-        # Normalize weights
-        target_weights = target_var / (target_var.sum() + 1e-8)
-        candidate_weights = candidate_var / (candidate_var.sum() + 1e-8)
-        
-        # Weighted aggregation
-        target_emb = np.sum(target_patches * target_weights.reshape(-1, 1), axis=0)
-        candidate_emb = np.sum(candidate_patches * candidate_weights.reshape(-1, 1), axis=0)
-        
-        # Cosine similarity
-        dot_product = np.dot(target_emb, candidate_emb)
-        norm_target = np.linalg.norm(target_emb)
-        norm_candidate = np.linalg.norm(candidate_emb)
-        
-        if norm_target == 0 or norm_candidate == 0:
-            return 0.0
-        
-        return dot_product / (norm_target * norm_candidate)
-    
-    elif method == "hybrid_distance":
-        # Combine multiple distance metrics
-        target_emb = target_patches.mean(axis=0)
-        candidate_emb = candidate_patches.mean(axis=0)
-        
-        # 1. Cosine similarity
-        cosine_sim = np.dot(target_emb, candidate_emb) / (np.linalg.norm(target_emb) * np.linalg.norm(candidate_emb) + 1e-8)
-        
-        # 2. Euclidean distance (converted to similarity)
-        euclidean_dist = np.linalg.norm(target_emb - candidate_emb)
-        euclidean_sim = max(0, 1 - (euclidean_dist / 30))  # Normalized
-        
-        # 3. Manhattan distance (converted to similarity)
-        manhattan_dist = np.sum(np.abs(target_emb - candidate_emb))
-        manhattan_sim = max(0, 1 - (manhattan_dist / 1000))  # Normalized
-        
-        # Weighted combination
-        hybrid_sim = 0.4 * cosine_sim + 0.4 * euclidean_sim + 0.2 * manhattan_sim
-        
-        return hybrid_sim
-    
-    else:
-        raise ValueError(f"Unknown enhanced method: {method}")
-
-def is_valid_coordinate(lon, lat):
-    """Check if coordinates are valid (not NaN, within valid ranges)"""
-    if pd.isna(lon) or pd.isna(lat):
-        return False
-    if math.isnan(lon) or math.isnan(lat):
-        return False
-    if lon < -180 or lon > 180:
-        return False
-    if lat < -90 or lat > 90:
-        return False
-    return True
-
-def get_or_compute_aggregated_embedding(location_id: int, method: str = 'mean') -> np.ndarray:
-    """
-    Get or compute aggregated embedding for a location using specified method.
-    Results are cached for efficiency.
-    """
-    cache_key = f"{location_id}_{method}"
-    
-    # Check cache first
-    if cache_key in aggregated_cache:
-        return aggregated_cache[cache_key]
-    
-    # Get full patch embeddings
-    if location_id not in embeddings_data['embeddings_dict']:
-        raise ValueError(f"Location {location_id} not found")
-    
-    full_patches = embeddings_data['embeddings_dict'][location_id]['patch_embeddings_full']
-    if full_patches is None:
-        raise ValueError(f"No full patch embeddings for location {location_id}")
-    
-    # Reshape from flattened to [196, 768]
-    patches = np.array(full_patches).reshape(196, 768)
-    
-    # Compute aggregation
-    if method == 'mean':
-        aggregated = patches.mean(axis=0)
-    elif method == 'attention_weighted':
-        # Use attention mechanism to weight patches
-        attention_scores = np.linalg.norm(patches, axis=1, keepdims=True)  # [196, 1]
-        attention_weights = np.exp(attention_scores) / np.sum(np.exp(attention_scores))  # Softmax
-        weighted_features = patches * attention_weights
-        aggregated = weighted_features.sum(axis=0)  # [768]
-    elif method == 'spatial_pyramid':
-        # Create spatial pyramid representation
-        spatial_features = patches.reshape(14, 14, 768)
-        
-        # Global average
-        global_avg = spatial_features.mean(axis=(0, 1))  # [768]
-        
-        # Quadrant averages (4 regions)
-        quad1 = spatial_features[:7, :7, :].mean(axis=(0, 1))    # Top-left
-        quad2 = spatial_features[:7, 7:, :].mean(axis=(0, 1))    # Top-right  
-        quad3 = spatial_features[7:, :7, :].mean(axis=(0, 1))    # Bottom-left
-        quad4 = spatial_features[7:, 7:, :].mean(axis=(0, 1))    # Bottom-right
-        
-        # Concatenate all levels
-        aggregated = np.concatenate([global_avg, quad1, quad2, quad3, quad4])  # [768*5]
-    else:
-        # Default to mean
-        aggregated = patches.mean(axis=0)
-    
-    # Cache result
-    aggregated_cache[cache_key] = aggregated
-    
-    return aggregated
-
-def calculate_patch_level_similarity(target_patches: np.ndarray, candidate_patches: np.ndarray, method: str) -> float:
-    """Calculate similarity between tiles using patch-level features."""
-    
-    if method == 'chamfer':
-        # Chamfer distance - more robust than Hausdorff
-        distances = cdist(target_patches, candidate_patches, metric='cosine')
-        
-        # Average of minimum distances in both directions
-        chamfer_dist = (distances.min(axis=1).mean() + distances.min(axis=0).mean()) / 2
-        return max(0, 1 - chamfer_dist)
-    
-    elif method == 'hausdorff':
-        # Modified Hausdorff distance for visual similarity
-        distances = cdist(target_patches, candidate_patches, metric='cosine')
-        
-        # Hausdorff distance (max of min distances in both directions)
-        min_dist_target_to_candidate = distances.min(axis=1).max()
-        min_dist_candidate_to_target = distances.min(axis=0).max()
-        hausdorff_dist = max(min_dist_target_to_candidate, min_dist_candidate_to_target)
-        
-        # Convert to similarity (0 to 1, higher is better)
-        return max(0, 1 - hausdorff_dist)
-    
-    elif method == 'spatial_aware':
-        # Consider spatial arrangement of patches (14x14 grid)
-        target_spatial = target_patches.reshape(14, 14, 768)
-        candidate_spatial = candidate_patches.reshape(14, 14, 768)
-        
-        # Compute similarity with spatial weights
-        similarities = []
-        for i in range(14):
-            for j in range(14):
-                # Cosine similarity between corresponding spatial patches
-                sim = cosine_similarity(
-                    target_spatial[i, j:j+1], 
-                    candidate_spatial[i, j:j+1]
-                )[0, 0]
-                
-                # Weight by distance from center (center patches more important)
-                center_weight = 1.0 / (1 + 0.3 * ((i-7)**2 + (j-7)**2)**0.5)
-                similarities.append(sim * center_weight)
-        
-        return np.mean(similarities)
-    
-    else:
-        raise ValueError(f"Unknown patch-level method: {method}")
-
-def calculate_similarity_by_method(target_location_id: int, candidate_location_id: int, method: SimilarityMethod) -> float:
-    """Calculate similarity using the specified method - now includes enhanced methods."""
-    
-    # Check if it's an enhanced method
-    enhanced_methods = [
-        SimilarityMethod.EUCLIDEAN_DISTANCE,
-        SimilarityMethod.CONTRASTIVE_COSINE, 
-        SimilarityMethod.NORMALIZED_PATCHES,
-        SimilarityMethod.TOP_K_PATCHES,
-        SimilarityMethod.PATCH_VARIANCE,
-        SimilarityMethod.HYBRID_DISTANCE
-    ]
-    
-    if method in enhanced_methods:
-        try:
-            return calculate_enhanced_similarity(target_location_id, candidate_location_id, method.value, embeddings_data)
-        except Exception as e:
-            print(f"Error in enhanced method {method.value}: {e}")
-            # Fallback to simple cosine
-            return calculate_similarity_by_method(target_location_id, candidate_location_id, SimilarityMethod.SIMPLE_COSINE)
-    
-    # Original methods (unchanged)
-    if method == SimilarityMethod.SIMPLE_COSINE:
-        # Use mean-aggregated embeddings computed on-demand
-        try:
-            target_emb = get_or_compute_aggregated_embedding(target_location_id, 'mean')
-            candidate_emb = get_or_compute_aggregated_embedding(candidate_location_id, 'mean')
-            
-            # Calculate cosine similarity
-            dot_product = np.dot(target_emb, candidate_emb)
-            norm_target = np.linalg.norm(target_emb)
-            norm_candidate = np.linalg.norm(candidate_emb)
-            
-            if norm_target == 0 or norm_candidate == 0:
-                return 0.0
-            
-            return float(dot_product / (norm_target * norm_candidate))
-        except Exception as e:
-            print(f"Error in simple cosine similarity: {e}")
-            return 0.0
-    
-    elif method in [SimilarityMethod.ATTENTION_WEIGHTED, SimilarityMethod.SPATIAL_PYRAMID]:
-        # Use enhanced aggregation methods
-        try:
-            method_name = method.value
-            target_agg = get_or_compute_aggregated_embedding(target_location_id, method_name)
-            candidate_agg = get_or_compute_aggregated_embedding(candidate_location_id, method_name)
-            
-            # Calculate cosine similarity on aggregated features
-            dot_product = np.dot(target_agg, candidate_agg)
-            norm_target = np.linalg.norm(target_agg)
-            norm_candidate = np.linalg.norm(candidate_agg)
-            
-            if norm_target == 0 or norm_candidate == 0:
-                return 0.0
-            
-            return float(dot_product / (norm_target * norm_candidate))
-        except Exception as e:
-            print(f"Error in {method.value} similarity: {e}")
-            # Fallback to simple cosine
-            return calculate_similarity_by_method(target_location_id, candidate_location_id, SimilarityMethod.SIMPLE_COSINE)
-    
-    elif method in [SimilarityMethod.PATCH_CHAMFER, SimilarityMethod.PATCH_HAUSDORFF, SimilarityMethod.SPATIAL_AWARE]:
-        # Use patch-level comparison methods
-        try:
-            target_data = embeddings_data['embeddings_dict'][target_location_id]
-            candidate_data = embeddings_data['embeddings_dict'][candidate_location_id]
-            
-            target_patches = np.array(target_data['patch_embeddings_full']).reshape(196, 768)
-            candidate_patches = np.array(candidate_data['patch_embeddings_full']).reshape(196, 768)
-            
-            # Extract method name (remove 'patch_' prefix)
-            patch_method = method.value.replace('patch_', '')
-            
-            return calculate_patch_level_similarity(target_patches, candidate_patches, patch_method)
-        except Exception as e:
-            print(f"Error in {method.value} similarity: {e}")
-            # Fallback to simple cosine
-            return calculate_similarity_by_method(target_location_id, candidate_location_id, SimilarityMethod.SIMPLE_COSINE)
-    
-    else:
-        raise ValueError(f"Unknown similarity method: {method}")
-
-def load_embeddings_from_files():
-    """Simplified version that loads only full patch embeddings."""
-    try:
-        print("Loading full patch embeddings from local files...")
-        
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..','..', '..','terramind', 'embeddings', 'urban_embeddings_224_terramind'))
-        
-        # Load from full_patch_embeddings directory only
-        full_patch_pattern = os.path.join(base_dir, "full_patch_embeddings", "*", "*.gpq")
-        full_patch_files = glob(full_patch_pattern)
-        
-        print(f"Found {len(full_patch_files)} full patch embedding files")
-        
-        if not full_patch_files:
-            raise Exception("No full patch embedding files found")
-        
-        # Load full patch embeddings
-        full_patch_gdfs = []
-        for file in full_patch_files:
-            try:
-                gdf = gpd.read_parquet(file)
-                for col in gdf.columns:
-                    if gdf[col].dtype.name == 'category':
-                        gdf[col] = gdf[col].astype(str)
-                full_patch_gdfs.append(gdf)
-                print(f"Loaded {len(gdf)} full patch tiles from {os.path.basename(file)}")
-            except Exception as e:
-                print(f"Error loading full patch file {file}: {e}")
-        
-        if not full_patch_gdfs:
-            raise Exception("No valid full patch embedding data could be loaded")
-        
-        # Combine full patch embeddings
-        all_full_patches = pd.concat(full_patch_gdfs, ignore_index=True)
-        print(f"Combined full patch embeddings: {len(all_full_patches)} records")
-        
-        # Process the data
-        locations_data = []
-        embeddings_dict = {}
-        skipped_count = 0
-        
-        for idx, row in all_full_patches.iterrows():
-            try:
-                # Extract coordinates
-                longitude = row.get('centroid_lon') or row.get('longitude')
-                latitude = row.get('centroid_lat') or row.get('latitude')
-                
-                if longitude is None or latitude is None or not is_valid_coordinate(longitude, latitude):
-                    skipped_count += 1
-                    continue
-                
-                # Get full patch embedding
-                full_embedding = row.get('embedding_patches_full')
-                if full_embedding is None:
-                    skipped_count += 1
-                    continue
-                
-                # Create unique ID
-                tile_id = row.get('tile_id')
-                if tile_id:
-                    unique_id = hash(str(tile_id)) % (10**9)
-                    if unique_id < 0:
-                        unique_id = -unique_id
-                else:
-                    unique_id = idx
-                
-                # Extract tile bounds if available
-                tile_bounds = None
-                if all(col in row for col in ['bounds_min_lon', 'bounds_min_lat', 'bounds_max_lon', 'bounds_max_lat']):
-                    min_lon = row['bounds_min_lon']
-                    min_lat = row['bounds_min_lat']
-                    max_lon = row['bounds_max_lon']
-                    max_lat = row['bounds_max_lat']
-                    
-                    if (not pd.isna(min_lon) and not pd.isna(min_lat) and 
-                        not pd.isna(max_lon) and not pd.isna(max_lat)):
-                        tile_bounds = [
-                            [float(min_lon), float(max_lat)],  # top-left
-                            [float(max_lon), float(max_lat)],  # top-right
-                            [float(max_lon), float(min_lat)],  # bottom-right
-                            [float(min_lon), float(min_lat)],  # bottom-left
-                            [float(min_lon), float(max_lat)]   # close polygon
-                        ]
-                
-                # Create location data
-                location_data = {
-                    'id': int(unique_id),
-                    'city': str(row.get('city', 'Unknown')),
-                    'country': str(row.get('country', 'Unknown')),
-                    'continent': str(row.get('continent', 'Unknown')),
-                    'longitude': float(longitude),
-                    'latitude': float(latitude),
-                    'date': str(row.get('acquisition_date')) if row.get('acquisition_date') else None,
-                    'tile_bounds': tile_bounds
-                }
-                
-                # Store embedding data (only full patches now)
-                embedding_data = {
-                    'patch_embeddings_full': full_embedding
-                }
-                
-                locations_data.append(location_data)
-                embeddings_dict[int(unique_id)] = embedding_data
-                
-            except Exception as e:
-                print(f"Error processing row {idx}: {str(e)}")
-                skipped_count += 1
-                continue
-        
-        if not locations_data:
-            raise Exception("No valid data could be processed from files")
-        
-        print(f"Successfully processed {len(locations_data)} records")
-        print(f"Skipped {skipped_count} records due to invalid data")
-        print(f"All records have full patch embeddings: 196×768 = 150,528 values each")
-        
-        return {
-            'locations': locations_data,
-            'embeddings_dict': embeddings_dict
-        }
-    
+        return client
     except Exception as e:
-        print(f"Error loading data from files: {str(e)}")
-        import traceback
-        print("Detailed error:")
-        print(traceback.format_exc())
+        logger.error(f"❌ Failed to connect to Qdrant: {e}")
+        raise
+
+def load_lightweight_data():
+    """Load enhanced lightweight metadata with exact bounds."""
+    try:
+        possible_paths = [
+            './production_data',
+            '../production_data', 
+            './migration/production_data',
+            '../migration/production_data',
+            '/Users/janmagnuszewski/dev/terramind/embeddings/production_data'
+        ]
+        
+        data_dir = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                logger.info(f"📁 Found data directory: {data_dir}")
+                break
+        
+        if not data_dir:
+            raise FileNotFoundError(f"Data directory not found. Tried: {possible_paths}")
+        
+        # Load location metadata with bounds
+        locations_file = os.path.join(data_dir, 'locations_metadata.json')
+        if os.path.exists(locations_file):
+            with open(locations_file, 'r') as f:
+                locations = json.load(f)
+                
+                # Count bounds statistics
+                exact_bounds_count = sum(1 for loc in locations if loc.get('has_exact_bounds', False))
+                total_count = len(locations)
+                
+                logger.info(f"📍 Loaded {total_count} location records")
+                logger.info(f"🎯 Exact bounds: {exact_bounds_count}/{total_count} ({exact_bounds_count/total_count*100:.1f}%)")
+        else:
+            raise FileNotFoundError(f"Locations metadata not found: {locations_file}")
+        
+        # Load city representatives
+        city_file = os.path.join(data_dir, 'city_representatives.json')
+        if os.path.exists(city_file):
+            with open(city_file, 'r') as f:
+                city_data = json.load(f)
+                logger.info(f"🏙️ Loaded {city_data['total_cities']} city representatives")
+        else:
+            logger.warning("⚠️ City representatives not found, will generate from locations")
+            city_data = None
+        
+        # Load UMAP coordinates with bounds
+        umap_file = os.path.join(data_dir, 'umap_coordinates.json')
+        if os.path.exists(umap_file):
+            with open(umap_file, 'r') as f:
+                umap_coords = json.load(f)
+                logger.info(f"🗺️ Loaded UMAP coordinates for {umap_coords['total_points']} points")
+                
+                # Log bounds statistics if available
+                if 'bounds_statistics' in umap_coords:
+                    bounds_stats = umap_coords['bounds_statistics']
+                    logger.info(f"📊 UMAP bounds coverage: {bounds_stats.get('exact_bounds_percentage', 0):.1f}%")
+        else:
+            logger.warning("⚠️ UMAP coordinates not found, will compute on-demand")
+            umap_coords = None
+        
+        # Load dataset statistics
+        stats_file = os.path.join(data_dir, 'dataset_statistics.json')
+        if os.path.exists(stats_file):
+            with open(stats_file, 'r') as f:
+                stats = json.load(f)
+                logger.info(f"📊 Loaded dataset statistics")
+                
+                # Log enhanced features if available
+                if 'enhanced_features' in stats:
+                    enhanced = stats['enhanced_features']
+                    if enhanced.get('exact_tile_bounds'):
+                        logger.info(f"✅ Enhanced features: exact bounds coverage {enhanced.get('bounds_coverage_percentage', 0):.1f}%")
+        else:
+            logger.warning("⚠️ Dataset statistics not found")
+            stats = None
+        
+        return locations, city_data, umap_coords, stats
+        
+    except Exception as e:
+        logger.error(f"❌ Error loading enhanced data: {e}")
+        raise
+
+async def query_qdrant_similarity(
+    target_location_id: int, 
+    collection_name: str,
+    limit: int = 100,
+    offset: int = 0
+) -> tuple[List[tuple], int]:
+    """Query Qdrant for similar vectors with comprehensive deduplication."""
+    try:
+        logger.info(f"🔍 Searching for target location {target_location_id} in collection {collection_name}")
+        
+        # Get the target vector
+        target_points = qdrant_client.retrieve(
+            collection_name=collection_name,
+            ids=[target_location_id],
+            with_vectors=True
+        )
+        
+        if not target_points:
+            logger.warning(f"❌ Target location {target_location_id} not found directly. Searching...")
+            
+            sample_points = qdrant_client.scroll(
+                collection_name=collection_name,
+                limit=10,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            sample_ids = [p.id for p in sample_points[0]]
+            logger.info(f"📋 Sample IDs in collection: {sample_ids[:5]}...")
+            
+            raise ValueError(f"Target location {target_location_id} not found in {collection_name}")
+        
+        target_vector = target_points[0].vector
+        logger.info(f"✅ Found target vector for location {target_location_id}")
+        
+        # Search for results
+        search_limit = max(500, (offset + limit) * 5)
+        
+        search_results = qdrant_client.search(
+            collection_name=collection_name,
+            query_vector=target_vector,
+            limit=search_limit,
+            with_payload=True,
+            score_threshold=0.0
+        )
+        
+        logger.info(f"📊 Raw search results: {len(search_results)} points")
+        
+        # Multi-level deduplication
+        seen_location_ids: Set[int] = set()
+        seen_coordinates: Set[tuple] = set()
+        seen_city_country: Set[tuple] = set()
+        unique_results = []
+        
+        for result in search_results:
+            location_id = int(result.id)
+            
+            # Skip the target location itself
+            if location_id == target_location_id:
+                continue
+            
+            # Skip if already seen this location ID
+            if location_id in seen_location_ids:
+                continue
+            
+            # Extract coordinates and location info
+            try:
+                longitude = float(result.payload['longitude'])
+                latitude = float(result.payload['latitude'])
+                city = str(result.payload['city'])
+                country = str(result.payload['country'])
+                continent = str(result.payload.get('continent', 'Unknown'))
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"⚠️ Skipping result with invalid payload: {e}")
+                continue
+            
+            # Skip if we've seen these exact coordinates
+            coord_key = (round(latitude, 6), round(longitude, 6))
+            if coord_key in seen_coordinates:
+                continue
+            
+            # Limit results per city
+            city_country_key = (city.lower().strip(), country.lower().strip())
+            city_country_count = sum(1 for cc in seen_city_country if cc == city_country_key)
+            
+            MAX_PER_CITY = 3
+            if city_country_count >= MAX_PER_CITY:
+                continue
+            
+            # Record this location
+            seen_location_ids.add(location_id)
+            seen_coordinates.add(coord_key)
+            seen_city_country.add(city_country_key)
+            
+            location_data = {
+                'id': location_id,
+                'city': city,
+                'country': country,
+                'continent': continent,
+                'longitude': longitude,
+                'latitude': latitude,
+                'date': result.payload.get('date')
+            }
+            similarity_score = float(result.score)
+            unique_results.append((location_data, similarity_score))
+        
+        total_available = len(unique_results)
+        paginated_results = unique_results[offset:offset + limit]
+        
+        logger.info(f"✅ Similarity query results:")
+        logger.info(f"   - Raw results: {len(search_results)}")
+        logger.info(f"   - After deduplication: {total_available}")
+        logger.info(f"   - Returned: {len(paginated_results)}")
+        
+        return paginated_results, total_available
+        
+    except Exception as e:
+        logger.error(f"❌ Error querying Qdrant similarity: {e}")
         raise
 
 @app.on_event("startup")
 async def startup_event():
-    """Load embeddings data on startup"""
-    global embeddings_data
+    """Initialize the enhanced application."""
+    global locations_data, umap_data, dataset_stats, city_representatives_data, qdrant_client
+    
     try:
-        print("Loading embeddings data from files...")
-        embeddings_data = load_embeddings_from_files()
-        print(f"Successfully loaded {len(embeddings_data['locations'])} locations")
+        logger.info("🚀 Starting Enhanced Satellite Embeddings Explorer - With Exact Bounds")
         
-        # Compute dataset statistics for enhanced methods
-        compute_dataset_statistics(embeddings_data)
+        # Setup Qdrant client
+        qdrant_client = setup_qdrant_client()
+        
+        # Load enhanced data
+        locations_data, city_representatives_data, umap_data, dataset_stats = load_lightweight_data()
+        
+        logger.info("✅ Enhanced application startup completed successfully")
+        logger.info(f"💾 Memory usage: Enhanced metadata with exact bounds")
+        logger.info(f"🎯 Ready to serve similarity queries via Qdrant")
         
     except Exception as e:
-        print(f"Error loading embeddings: {str(e)}")
-        embeddings_data = None
+        logger.error(f"❌ Startup failed: {e}")
+        # Set minimal fallback data
+        locations_data = []
+        city_representatives_data = None
+        umap_data = None
+        dataset_stats = None
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
-    return {"message": "Enhanced Embeddings Explorer API v3.2", "status": "running", "enhanced_methods": True}
-
-@app.get("/api/similarity-methods", response_model=SimilarityMethodsResponse)
-async def get_similarity_methods():
-    """Get available similarity methods with their configurations"""
+    """Root endpoint with enhanced system status."""
+    qdrant_status = "connected" if qdrant_client else "disconnected"
+    
+    # Get collection info
+    collection_info = {}
+    bounds_stats = {"exact": 0, "fallback": 0, "percentage": 0}
+    
+    if qdrant_client:
+        try:
+            collections = qdrant_client.get_collections()
+            for method, collection_name in COLLECTIONS.items():
+                exists = any(c.name == collection_name for c in collections.collections)
+                collection_info[method] = {
+                    "collection_name": collection_name,
+                    "exists": exists
+                }
+        except Exception as e:
+            logger.error(f"Error getting collection info: {e}")
+    
+    # Calculate bounds statistics
+    if locations_data:
+        bounds_stats["exact"] = sum(1 for loc in locations_data if loc.get('has_exact_bounds', False))
+        bounds_stats["fallback"] = len(locations_data) - bounds_stats["exact"]
+        bounds_stats["percentage"] = (bounds_stats["exact"] / len(locations_data)) * 100 if locations_data else 0
+    
     return {
-        "methods": [
-            {
-                "id": method.value,
-                "config": config
-            }
-            for method, config in SIMILARITY_CONFIGS.items()
-        ],
-        "recommended": SimilarityMethod.CONTRASTIVE_COSINE.value,  # Updated recommendation
-        "fastest": SimilarityMethod.SIMPLE_COSINE.value,
-        "best_quality": SimilarityMethod.HYBRID_DISTANCE.value    # Updated best quality
+        "message": "Enhanced Satellite Embeddings Explorer - With Exact Bounds", 
+        "version": "3.1.0",
+        "status": "running",
+        "qdrant_status": qdrant_status,
+        "similarity_methods": list(COLLECTIONS.keys()),
+        "collections": collection_info,
+        "locations_loaded": len(locations_data) if locations_data else 0,
+        "cities_loaded": len(city_representatives_data.get('city_representatives', [])) if city_representatives_data else 0,
+        "bounds_coverage": bounds_stats,
+        "architecture": "enhanced_qdrant_with_exact_bounds"
     }
 
-@app.get("/api/similarity/{location_id}", response_model=EnhancedSimilarityResponse)
+
+@app.get("/api/locations", response_model=List[LocationData])
+async def get_enhanced_locations(
+    zoom: Optional[float] = Query(None, description="Map zoom level for LOD switching"),
+    detail_level: Optional[str] = Query("auto", description="Detail level: 'city', 'tiles', or 'auto'")
+):
+    """Get locations with level-of-detail based on zoom level."""
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Location data not loaded")
+    
+    # Determine detail level based on zoom
+    zoom_threshold = 6.0  # Switch to individual tiles above zoom level 6
+    
+    if detail_level == "auto" and zoom is not None:
+        use_city_representatives = zoom <= zoom_threshold
+    elif detail_level == "city":
+        use_city_representatives = True
+    elif detail_level == "tiles":
+        use_city_representatives = False
+    else:
+        # Default behavior - show all tiles
+        use_city_representatives = False
+    
+    logger.info(f"📍 Location request: zoom={zoom}, detail_level={detail_level}, using_city_reps={use_city_representatives}")
+    
+    if use_city_representatives and city_representatives_data:
+        # Return city representatives for zoomed out view
+        city_locations = []
+        for city_rep in city_representatives_data['city_representatives']:
+            city_location = LocationData(
+                id=city_rep['representative_tile_id'],
+                city=city_rep['city'],
+                country=city_rep['country'],
+                continent=city_rep['continent'],
+                longitude=city_rep['centroid_longitude'],
+                latitude=city_rep['centroid_latitude'],
+                date=None,  # City representatives don't have specific dates
+                tile_bounds=None,  # City representatives use computed bounds
+                has_exact_bounds=False,
+                tile_width_degrees=None,
+                tile_height_degrees=None
+            )
+            city_locations.append(city_location)
+        
+        logger.info(f"📊 City representatives response: {len(city_locations)} cities")
+        return city_locations
+    
+    else:
+        # Return all individual tiles for zoomed in view
+        enhanced_locations = []
+        bounds_stats = {"exact": 0, "fallback": 0}
+        
+        for location_data in locations_data:
+            # Check if we have tile bounds data
+            tile_bounds = location_data.get('tile_bounds')
+            has_exact_bounds = location_data.get('has_exact_bounds', False)
+            
+            if has_exact_bounds and tile_bounds:
+                bounds_stats["exact"] += 1
+            else:
+                bounds_stats["fallback"] += 1
+            
+            enhanced_location = LocationData(
+                id=location_data['id'],
+                city=location_data['city'],
+                country=location_data['country'],
+                continent=location_data['continent'],
+                longitude=location_data['longitude'],
+                latitude=location_data['latitude'],
+                date=location_data.get('date'),
+                # Enhanced: Include tile bounds data
+                tile_bounds=tile_bounds,
+                has_exact_bounds=has_exact_bounds,
+                tile_width_degrees=location_data.get('tile_width_degrees'),
+                tile_height_degrees=location_data.get('tile_height_degrees')
+            )
+            enhanced_locations.append(enhanced_location)
+        
+        logger.info(f"📊 Enhanced tiles response: {len(enhanced_locations)} tiles, {bounds_stats['exact']} exact bounds, {bounds_stats['fallback']} fallback")
+        return enhanced_locations
+
+
+@app.get("/api/locations/{location_id}")
+async def get_enhanced_location(location_id: int):
+    """Get detailed info for a specific location with bounds."""
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Location data not loaded")
+    
+    # Find location by ID
+    location_data = None
+    for loc in locations_data:
+        if loc['id'] == location_id:
+            location_data = loc
+            break
+    
+    if location_data is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    response_data = {
+        **location_data,
+        "embedding_shape": (768,),
+        "has_full_patches": True,
+        "stored_in": "qdrant_vector_db",
+        "bounds_type": "exact" if location_data.get('has_exact_bounds', False) else "fallback"
+    }
+    
+    return response_data
+
+@app.get("/api/cities", response_model=CityRepresentativesResponse)
+async def get_city_representatives():
+    """Get city representatives for map clustering."""
+    if not city_representatives_data:
+        # Fallback: generate from locations
+        if not locations_data:
+            raise HTTPException(status_code=503, detail="Location data not loaded")
+        
+        logger.info("🏙️ Generating city representatives from enhanced location data...")
+        city_groups = {}
+        
+        for location in locations_data:
+            city_key = f"{location['city']}, {location['country']}"
+            if city_key not in city_groups:
+                city_groups[city_key] = []
+            city_groups[city_key].append(location)
+        
+        city_reps = []
+        for city_key, city_locations in city_groups.items():
+            city_locations.sort(key=lambda x: x['id'])
+            representative = city_locations[0]
+            
+            lons = [loc['longitude'] for loc in city_locations]
+            lats = [loc['latitude'] for loc in city_locations]
+            
+            city_rep = {
+                'city_key': city_key,
+                'city': representative['city'],
+                'country': representative['country'],
+                'continent': representative['continent'],
+                'representative_tile_id': representative['id'],
+                'representative_longitude': representative['longitude'],
+                'representative_latitude': representative['latitude'],
+                'centroid_longitude': sum(lons) / len(lons),
+                'centroid_latitude': sum(lats) / len(lats),
+                'tile_count': len(city_locations),
+                'all_tile_ids': [loc['id'] for loc in city_locations]
+            }
+            city_reps.append(city_rep)
+        
+        return CityRepresentativesResponse(
+            city_representatives=city_reps,
+            total_cities=len(city_reps),
+            total_tiles=len(locations_data),
+            source='generated_from_enhanced_locations'
+        )
+    
+    return CityRepresentativesResponse(**city_representatives_data)
+
+@app.get("/api/tile-bounds/{location_id}", response_model=TileBoundsResponse)
+async def get_tile_bounds(location_id: int):
+    """Get exact tile boundary coordinates for a location if available."""
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Location data not loaded")
+    
+    # Find location by ID
+    location_data = None
+    for loc in locations_data:
+        if loc['id'] == location_id:
+            location_data = loc
+            break
+    
+    if location_data is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    return TileBoundsResponse(
+        location_id=location_id,
+        city=location_data['city'],
+        country=location_data['country'],
+        tile_bounds=location_data.get('tile_bounds'),
+        has_exact_bounds=location_data.get('has_exact_bounds', False),
+        tile_width_degrees=location_data.get('tile_width_degrees'),
+        tile_height_degrees=location_data.get('tile_height_degrees')
+    )
+
+@app.get("/api/similarity/{location_id}", response_model=SimplifiedSimilarityResponse)
 async def find_similar_locations(
     location_id: int, 
     offset: int = Query(0, ge=0, description="Number of results to skip"),
-    limit: int = Query(6, ge=1, le=20, description="Number of results to return"),
-    method: SimilarityMethod = Query(SimilarityMethod.CONTRASTIVE_COSINE, description="Similarity calculation method")  # Updated default
+    limit: int = Query(6, ge=1, le=50, description="Number of results to return"),
+    method: str = Query("regular", description="Similarity method: regular, global_contrastive")
 ):
-    """Find most similar locations using specified method with pagination"""
-    if embeddings_data is None:
-        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    """Find most similar locations using Qdrant vector similarity."""
+    if not qdrant_client:
+        raise HTTPException(status_code=503, detail="Qdrant client not initialized")
+    
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Location data not loaded")
+    
+    # Validate method
+    if method not in COLLECTIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid method '{method}'. Available: {list(COLLECTIONS.keys())}"
+        )
     
     # Find target location
     target_location = None
-    
-    for location in embeddings_data['locations']:
+    for location in locations_data:
         if location['id'] == location_id:
             target_location = location
             break
     
     if target_location is None:
-        raise HTTPException(status_code=404, detail="Location not found")
+        raise HTTPException(status_code=404, detail="Location not found in metadata")
     
-    # Check if we have cached similarities for this location and method
-    cache_key = f"{location_id}_{method.value}"
-    cached_similarities = similarity_results_cache.get(cache_key)
+    # Check cache
+    cache_key = f"similarity_{location_id}_{method}_{offset}_{limit}"
+    cached_result = similarity_cache.get(cache_key)
+    if cached_result:
+        logger.info(f"🎯 Cache hit for similarity query: {cache_key}")
+        return cached_result
     
-    if cached_similarities is None:
-        print(f"Computing similarities for location {location_id} using {method.value}...")
+    try:
+        collection_name = COLLECTIONS[method]
+        logger.info(f"🔍 Querying {collection_name} for location {location_id}")
         
-        # Calculate similarities for all locations
-        similarities = []
-        
-        for location in embeddings_data['locations']:
-            if location['id'] == location_id:
-                continue  # Skip target location
-                
-            try:
-                similarity = calculate_similarity_by_method(location_id, location['id'], method)
-                similarities.append((location, similarity))
-            except Exception as e:
-                print(f"Error calculating similarity for location {location['id']}: {e}")
-                continue
-        
-        # Sort by similarity (highest first)
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        
-        # Cache the complete sorted results
-        similarity_results_cache[cache_key] = similarities
-        print(f"Cached {len(similarities)} similarity results for location {location_id}")
-        
-        # Print some diagnostics for enhanced methods
-        if similarities:
-            scores = [s[1] for s in similarities]
-            print(f"   📊 Similarity range: {min(scores):.4f} - {max(scores):.4f}")
-            print(f"   📈 Mean similarity: {np.mean(scores):.4f}")
-            print(f"   📏 Std deviation: {np.std(scores):.4f}")
-        
-        cached_similarities = similarities
-    else:
-        print(f"Using cached similarities for location {location_id} using {method.value}")
-    
-    # Apply pagination
-    total_results = len(cached_similarities)
-    paginated_similarities = cached_similarities[offset:offset + limit]
-    
-    # Format response
-    similar_locations = []
-    for location, sim_score in paginated_similarities:
-        # Validate coordinates before adding to response
-        if not is_valid_coordinate(location['longitude'], location['latitude']):
-            continue
-            
-        similar_location = {
-            'id': location['id'],
-            'city': location['city'],
-            'country': location['country'],
-            'continent': location['continent'],
-            'longitude': location['longitude'],
-            'latitude': location['latitude'],
-            'date': location['date'],
-            "similarity_score": float(sim_score)
-        }
-        similar_locations.append(similar_location)
-    
-    method_config = SIMILARITY_CONFIGS[method]
-    
-    # Add pagination metadata
-    has_more = (offset + limit) < total_results
-    next_offset = offset + limit if has_more else None
-    
-    return {
-        "target_location_id": location_id,
-        "similar_locations": similar_locations,
-        "method_used": method.value,
-        "method_config": method_config,
-        "pagination": {
-            "offset": offset,
-            "limit": limit,
-            "total_results": total_results,
-            "has_more": has_more,
-            "next_offset": next_offset,
-            "returned_count": len(similar_locations)
-        }
-    }
-
-# The rest of your endpoints remain the same...
-@app.get("/api/locations", response_model=List[LocationData])
-async def get_locations():
-    """Get all locations with their basic info"""
-    if embeddings_data is None:
-        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
-    
-    locations = []
-    for location_data in embeddings_data['locations']:
-        if not is_valid_coordinate(location_data['longitude'], location_data['latitude']):
-            continue
-            
-        location = LocationData(
-            id=location_data['id'],
-            city=location_data['city'],
-            country=location_data['country'],
-            continent=location_data['continent'],
-            longitude=location_data['longitude'],
-            latitude=location_data['latitude'],
-            date=location_data['date']
+        # Query Qdrant
+        similar_results, total_results = await query_qdrant_similarity(
+            target_location_id=location_id,
+            collection_name=collection_name,
+            limit=limit,
+            offset=offset
         )
-        locations.append(location)
-    
-    return locations
+        
+        # Format response
+        similar_locations = []
+        for location_data, sim_score in similar_results:
+            if location_data['id'] == location_id:
+                continue
+                
+            similar_location = SimilarLocation(
+                id=location_data['id'],
+                city=location_data['city'],
+                country=location_data['country'],
+                continent=location_data['continent'],
+                longitude=location_data['longitude'],
+                latitude=location_data['latitude'],
+                date=location_data['date'],
+                similarity_score=sim_score
+            )
+            similar_locations.append(similar_location)
+        
+        # Create pagination info
+        has_more = (offset + len(similar_locations)) < total_results
+        next_offset = offset + limit if has_more else None
+        
+        pagination = PaginationInfo(
+            offset=offset,
+            limit=limit,
+            total_results=total_results,
+            has_more=has_more,
+            next_offset=next_offset,
+            returned_count=len(similar_locations)
+        )
+        
+        response = SimplifiedSimilarityResponse(
+            target_location_id=location_id,
+            similar_locations=similar_locations,
+            method_used=f"qdrant_{method}",
+            pagination=pagination
+        )
+        
+        # Cache the result
+        similarity_cache.set(cache_key, response)
+        
+        logger.info(f"✅ Similarity query completed: {len(similar_locations)} unique results")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"❌ Error in similarity search: {e}")
+        raise HTTPException(status_code=500, detail=f"Similarity search failed: {str(e)}")
 
-@app.get("/api/locations/{location_id}")
-async def get_location(location_id: int):
-    """Get detailed info for a specific location"""
-    if embeddings_data is None:
-        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+@app.get("/api/umap", response_model=UMapResponse)
+async def get_enhanced_umap_embeddings():
+    """Get enhanced UMAP 2D coordinates with tile bounds information."""
+    if not umap_data:
+        raise HTTPException(
+            status_code=503, 
+            detail="UMAP data not available. Run enhanced migration script."
+        )
     
-    # Find location by ID
-    location_data = None
-    for loc in embeddings_data['locations']:
-        if loc['id'] == location_id:
-            location_data = loc
-            break
+    logger.info("🗺️ Returning enhanced UMAP coordinates with bounds info")
     
-    if location_data is None:
-        raise HTTPException(status_code=404, detail="Location not found")
+    # Convert to response model with bounds
+    enhanced_umap_points = []
+    bounds_included_count = 0
     
-    # Get embedding info - we now compute aggregated on-demand
-    embedding_shape = (196, 768)  # Full patches shape
+    for point_data in umap_data['umap_points']:
+        has_bounds = point_data.get('has_exact_bounds', False)
+        if has_bounds:
+            bounds_included_count += 1
+        
+        enhanced_umap_point = UMapPoint(
+            location_id=point_data['location_id'],
+            x=point_data['x'],
+            y=point_data['y'],
+            city=point_data['city'],
+            country=point_data['country'],
+            continent=point_data['continent'],
+            longitude=point_data['longitude'],
+            latitude=point_data['latitude'],
+            date=point_data.get('date'),
+            # Enhanced: Include bounds info
+            tile_bounds=point_data.get('tile_bounds'),
+            has_exact_bounds=has_bounds
+        )
+        enhanced_umap_points.append(enhanced_umap_point)
     
-    response_data = {
-        **location_data,
-        "embedding_shape": embedding_shape,
-        "has_full_patches": True
-    }
+    logger.info(f"📊 UMAP points with bounds: {bounds_included_count}/{len(enhanced_umap_points)}")
     
-    # Remove tile_bounds from response as it's not part of the model
-    if 'tile_bounds' in response_data:
-        del response_data['tile_bounds']
+    # Create bounds statistics
+    bounds_stats = None
+    if 'bounds_statistics' in umap_data:
+        bounds_stats = BoundsStatistics(**umap_data['bounds_statistics'])
     
-    return response_data
+    return UMapResponse(
+        umap_points=enhanced_umap_points,
+        total_points=len(enhanced_umap_points),
+        bounds_statistics=bounds_stats
+    )
 
-@app.get("/api/tile-bounds/{location_id}", response_model=TileBoundsResponse)
-async def get_tile_bounds(location_id: int):
-    """Get exact tile boundary coordinates for a location if available"""
-    if embeddings_data is None:
-        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+@app.get("/api/stats", response_model=SimplifiedStatsResponse)
+async def get_enhanced_stats():
+    """Get enhanced dataset statistics including bounds coverage."""
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Location data not loaded")
     
-    # Find location by ID
-    location_data = None
-    for loc in embeddings_data['locations']:
-        if loc['id'] == location_id:
-            location_data = loc
-            break
+    # Calculate bounds statistics
+    exact_bounds_count = sum(1 for loc in locations_data if loc.get('has_exact_bounds', False))
+    fallback_bounds_count = len(locations_data) - exact_bounds_count
+    exact_bounds_percentage = (exact_bounds_count / len(locations_data)) * 100 if locations_data else 0
     
-    if location_data is None:
-        raise HTTPException(status_code=404, detail="Location not found")
+    # Use dataset stats if available
+    if dataset_stats:
+        countries = list(set(loc['country'] for loc in locations_data))
+        continents = list(set(loc['continent'] for loc in locations_data))
+        
+        enhanced_stats = SimplifiedStatsResponse(
+            total_locations=dataset_stats['total_samples'],
+            countries_count=len(countries),
+            continents_count=len(continents),
+            embedding_dimension=dataset_stats['embedding_dimension'],
+            locations_with_full_patches=dataset_stats['total_samples'],
+            countries=sorted(countries),
+            continents=sorted(continents),
+            similarity_method="qdrant_vector_search",
+            # Enhanced: Add bounds coverage
+            bounds_coverage_percentage=exact_bounds_percentage,
+            tiles_with_exact_bounds=exact_bounds_count,
+            tiles_with_fallback_bounds=fallback_bounds_count
+        )
+        
+    else:
+        # Fallback computation
+        countries = list(set(loc['country'] for loc in locations_data))
+        continents = list(set(loc['continent'] for loc in locations_data))
+        
+        enhanced_stats = SimplifiedStatsResponse(
+            total_locations=len(locations_data),
+            countries_count=len(countries),
+            continents_count=len(continents),
+            embedding_dimension=768,
+            locations_with_full_patches=len(locations_data),
+            countries=sorted(countries),
+            continents=sorted(continents),
+            similarity_method="qdrant_vector_search",
+            # Enhanced: Add bounds coverage
+            bounds_coverage_percentage=exact_bounds_percentage,
+            tiles_with_exact_bounds=exact_bounds_count,
+            tiles_with_fallback_bounds=fallback_bounds_count
+        )
     
-    return {
-        "location_id": location_id,
-        "city": location_data['city'],
-        "country": location_data['country'],
-        "tile_bounds": location_data.get('tile_bounds'),
-        "has_exact_bounds": location_data.get('tile_bounds') is not None
-    }
-
-@app.get("/api/stats", response_model=EnhancedStatsResponse)
-async def get_stats():
-    """Get basic statistics about the dataset"""
-    if embeddings_data is None:
-        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
+    logger.info(f"📊 Enhanced bounds coverage: {exact_bounds_count}/{len(locations_data)} ({exact_bounds_percentage:.1f}%) exact")
     
-    locations = embeddings_data['locations']
-    countries = list(set(loc['country'] for loc in locations))
-    continents = list(set(loc['continent'] for loc in locations))
-    
-    # All locations have full patches in this simplified version
-    embedding_dim = 768  # Base dimension before aggregation
-    
-    return {
-        "total_locations": len(locations),
-        "countries_count": len(countries),
-        "continents_count": len(continents),
-        "embedding_dimension": embedding_dim,
-        "locations_with_full_patches": len(locations),  # All have full patches
-        "countries": sorted(countries),
-        "continents": sorted(continents),
-        "available_similarity_methods": len(SIMILARITY_CONFIGS)
-    }
+    return enhanced_stats
 
 @app.get("/api/config", response_model=ConfigResponse)
 async def get_config():
-    """Get configuration including Mapbox token"""
-    return {
-        "mapbox_token": os.getenv("MAPBOX_TOKEN", "")
-    }
-
-@app.get("/api/umap")
-async def get_umap_embeddings():
-    """Get UMAP 2D embeddings for all locations using mean-aggregated embeddings"""
-    global umap_cache
-    
-    if embeddings_data is None:
-        raise HTTPException(status_code=503, detail="Embeddings data not loaded")
-    
-    # Return cached result if available
-    if umap_cache is not None:
-        print("Returning cached UMAP data")
-        return umap_cache
-    
-    try:
-        print("Computing UMAP embeddings from full patch data...")
-        
-        # Get mean-aggregated embeddings for UMAP computation
-        embeddings_list = []
-        valid_locations = []
-        
-        for location in embeddings_data['locations']:
-            try:
-                # Compute mean aggregation on-demand
-                aggregated_embedding = get_or_compute_aggregated_embedding(location['id'], 'mean')
-                embeddings_list.append(aggregated_embedding)
-                valid_locations.append(location)
-            except Exception as e:
-                print(f"Error processing location {location['id']} for UMAP: {e}")
-                continue
-        
-        if not embeddings_list:
-            raise HTTPException(status_code=500, detail="No valid embeddings found for UMAP")
-        
-        # Run UMAP computation in thread pool
-        loop = asyncio.get_event_loop()
-        umap_embeddings = await loop.run_in_executor(
-            executor, 
-            compute_umap_embeddings, 
-            embeddings_list
-        )
-        
-        # Format response data
-        umap_points = []
-        for i, umap_coord in enumerate(umap_embeddings):
-            location_data = valid_locations[i]
-            
-            # Validate coordinates before adding to response
-            if not is_valid_coordinate(location_data['longitude'], location_data['latitude']):
-                continue
-            
-            umap_points.append({
-                "location_id": location_data['id'],
-                "x": float(umap_coord[0]),
-                "y": float(umap_coord[1]),
-                "city": location_data['city'],
-                "country": location_data['country'],
-                "continent": location_data['continent'],
-                "longitude": location_data['longitude'],
-                "latitude": location_data['latitude'],
-                "date": location_data['date']
-            })
-        
-        result = {
-            "umap_points": umap_points,
-            "total_points": len(umap_points)
-        }
-        
-        umap_cache = result
-        
-        print(f"UMAP computation successful: {len(umap_points)} points")
-        return result
-        
-    except Exception as e:
-        print(f"Error computing UMAP: {str(e)}")
-        import traceback
-        print("Detailed error:")
-        print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Failed to compute UMAP embeddings: {str(e)}")
-
-def compute_umap_embeddings(embeddings_array):
-    """Compute UMAP embeddings in a separate thread"""
-    print("Computing UMAP embeddings...")
-    
-    embeddings_matrix = np.array(embeddings_array)
-    n_samples = len(embeddings_matrix)
-    
-    # Adaptive parameters based on dataset size
-    if n_samples > 10000:
-        n_neighbors = min(50, n_samples // 100)
-        min_dist = 0.5
-    elif n_samples > 5000:
-        n_neighbors = min(30, n_samples // 50)
-        min_dist = 0.3
-    else:
-        n_neighbors = min(15, max(5, n_samples // 20))
-        min_dist = 0.1
-    
-    print(f"UMAP parameters: n_neighbors={n_neighbors}, min_dist={min_dist}")
-    
-    # Create UMAP reducer
-    reducer = umap.UMAP(
-        n_components=2,
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        metric='cosine',
-        random_state=42,
-        verbose=True
+    """Get configuration including Mapbox token."""
+    return ConfigResponse(
+        mapbox_token=os.getenv("MAPBOX_TOKEN", "")
     )
+
+@app.get("/api/health")
+async def enhanced_health_check():
+    """Enhanced health check with bounds coverage."""
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "components": {}
+    }
     
-    # Fit and transform the embeddings
-    umap_embeddings = reducer.fit_transform(embeddings_matrix)
+    # Check Qdrant
+    try:
+        if qdrant_client:
+            collections = qdrant_client.get_collections()
+            collection_status = {}
+            for method, collection_name in COLLECTIONS.items():
+                exists = any(c.name == collection_name for c in collections.collections)
+                collection_status[method] = {
+                    "collection_name": collection_name,
+                    "exists": exists
+                }
+            
+            health_status["components"]["qdrant"] = {
+                "status": "healthy",
+                "total_collections": len(collections.collections),
+                "our_collections": collection_status
+            }
+        else:
+            health_status["components"]["qdrant"] = {"status": "disconnected"}
+    except Exception as e:
+        health_status["components"]["qdrant"] = {"status": "error", "error": str(e)}
     
-    print("UMAP computation completed")
-    return umap_embeddings
+    # Enhanced data check with bounds
+    bounds_stats = {"exact": 0, "fallback": 0, "percentage": 0}
+    if locations_data:
+        bounds_stats["exact"] = sum(1 for loc in locations_data if loc.get('has_exact_bounds', False))
+        bounds_stats["fallback"] = len(locations_data) - bounds_stats["exact"]
+        bounds_stats["percentage"] = (bounds_stats["exact"] / len(locations_data)) * 100
+    
+    health_status["components"]["data"] = {
+        "locations_loaded": len(locations_data) if locations_data else 0,
+        "cities_loaded": len(city_representatives_data.get('city_representatives', [])) if city_representatives_data else 0,
+        "umap_available": umap_data is not None,
+        "stats_available": dataset_stats is not None,
+        "bounds_coverage": bounds_stats
+    }
+    
+    # Cache status
+    health_status["components"]["cache"] = {
+        "size": len(similarity_cache.cache),
+        "max_size": similarity_cache.max_size
+    }
+    
+    return health_status
+
+@app.post("/api/cache/clear")
+async def clear_cache():
+    """Clear the similarity cache."""
+    similarity_cache.clear()
+    logger.info("🧹 Similarity cache cleared")
+    return {"message": "Cache cleared", "status": "success"}
+
+@app.get("/api/methods")
+async def get_similarity_methods():
+    """Get available similarity methods and descriptions."""
+    methods = {
+        "regular": {
+            "name": "Regular Embeddings",
+            "description": "Standard similarity using mean-aggregated patch embeddings",
+            "collection": COLLECTIONS["regular"],
+            "use_case": "General similarity based on overall visual appearance"
+        },
+        "global_contrastive": {
+            "name": "Global Contrastive",
+            "description": "Dataset mean subtracted to highlight city-level differences",
+            "collection": COLLECTIONS["global_contrastive"],
+            "use_case": "Find cities that differ from the global average in similar ways"
+        }
+    }
+    
+    return {
+        "available_methods": methods,
+        "default_method": "regular",
+        "total_methods": len(methods)
+    }
 
 if __name__ == "__main__":
     import uvicorn

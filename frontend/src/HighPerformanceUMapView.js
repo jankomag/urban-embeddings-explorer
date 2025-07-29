@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 
-const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelect }) => {
+const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLocations, onLocationSelect }) => {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [umapData, setUmapData] = useState(null);
@@ -16,13 +16,16 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
   const hoveredPointRef = useRef(null);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const isDraggingRef = useRef(false);
+  const dragStartTimeRef = useRef(null);
+  const dragDistanceRef = useRef(0);
   const transformRef = useRef({ k: 1, x: 0, y: 0 });
+  const mouseDownPosRef = useRef({ x: 0, y: 0 });
 
   const API_BASE_URL = process.env.NODE_ENV === 'production' 
     ? 'https://your-domain.com'
     : 'http://localhost:8000';
 
-  // Continent color mapping - optimized for Canvas with opacity
+  // Continent color mapping
   const continentColors = {
     'Africa': '#e74c3c',
     'Asia': '#3498db', 
@@ -35,6 +38,10 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
 
   // Plot margins to ensure axes don't overlap with points
   const PLOT_MARGIN = { top: 30, right: 30, bottom: 60, left: 60 };
+
+  // Enhanced thresholds for distinguishing click from drag
+  const DRAG_THRESHOLD_PX = 5;
+  const DRAG_THRESHOLD_TIME = 150;
 
   // Throttled resize handler for performance
   const handleResize = useCallback(() => {
@@ -86,12 +93,19 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
       zoomToPoint(locationId);
     };
 
+    const handleCenterOnCityTiles = (event) => {
+      const { locationIds } = event.detail;
+      centerOnCityTiles(locationIds);
+    };
+
     window.addEventListener('highlightUmapPoint', handleHighlightPoint);
     window.addEventListener('zoomToUmapPoint', handleZoomToPoint);
+    window.addEventListener('centerOnCityTiles', handleCenterOnCityTiles);
     
     return () => {
       window.removeEventListener('highlightUmapPoint', handleHighlightPoint);
       window.removeEventListener('zoomToUmapPoint', handleZoomToPoint);
+      window.removeEventListener('centerOnCityTiles', handleCenterOnCityTiles);
     };
   }, [umapData]);
 
@@ -100,8 +114,6 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     setError(null);
 
     try {
-      console.log('Fetching UMAP data...');
-      
       const response = await fetch(`${API_BASE_URL}/api/umap`);
       if (!response.ok) {
         const errorData = await response.json();
@@ -109,9 +121,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
       }
       const data = await response.json();
       setUmapData(data);
-      console.log(`UMAP data loaded: ${data.total_points} points`);
     } catch (err) {
-      console.error('Error fetching UMAP data:', err);
       setError(`Failed to load UMAP visualization: ${err.message}`);
       
       // Fallback: compute simple projection
@@ -157,7 +167,6 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     
     const { xScale, yScale } = scalesRef.current;
     
-    // Build quadtree with screen coordinates for accurate hit testing
     return d3.quadtree()
       .x(d => {
         const baseX = xScale(d.x);
@@ -252,7 +261,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     ctx.restore();
   }, [dimensions]);
 
-  // Optimized point rendering function with opacity and layering
+  // Enhanced point rendering function with city filtering support
   const renderPoints = useCallback((ctx, data, transform = { k: 1, x: 0, y: 0 }) => {
     if (!data || !scalesRef.current.xScale) return;
     
@@ -265,7 +274,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     // Draw axes first (they don't transform)
     drawAxes(ctx);
     
-    // Render points with layering - selected points on top
+    // Render points with layering - city filtered -> selected -> hovered
     ctx.save();
     
     const plotWidth = dimensions.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
@@ -278,6 +287,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     
     // Separate points into layers
     const regularPoints = [];
+    const cityFilteredPoints = [];
     const selectedPoints = [];
     const hoveredPoint = [];
     
@@ -301,20 +311,28 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
         hoveredPoint.push(pointData);
       } else if (selectedLocations.has(point.location_id)) {
         selectedPoints.push(pointData);
+      } else if (cityFilteredLocations.has(point.location_id)) {
+        cityFilteredPoints.push(pointData);
       } else {
         regularPoints.push(pointData);
       }
     });
     
-    // Render in layers: regular -> selected -> hovered
-    const renderLayer = (points, isSelected = false, isHovered = false) => {
+    // Render in layers: regular -> city filtered -> selected -> hovered
+    const renderLayer = (points, isSelected = false, isHovered = false, isCityFiltered = false) => {
       points.forEach(point => {
-        const baseRadius = isSelected ? 6 : 4;
+        const baseRadius = isSelected ? 6 : (isCityFiltered ? 5 : 4);
         const radius = isHovered ? baseRadius + 2 : baseRadius;
         const color = continentColors[point.continent] || '#666';
         
-        // Apply opacity to regular points
-        ctx.globalAlpha = isSelected || isHovered ? 1.0 : 0.7;
+        // Apply opacity based on layer
+        if (isCityFiltered) {
+          ctx.globalAlpha = 0.9; // High opacity for city filtered
+        } else if (isSelected || isHovered) {
+          ctx.globalAlpha = 1.0; // Full opacity for selected/hovered
+        } else {
+          ctx.globalAlpha = cityFilteredLocations.size > 0 ? 0.3 : 0.7; // Dimmed if city filter active
+        }
         
         // Draw point
         ctx.beginPath();
@@ -327,6 +345,10 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
           ctx.strokeStyle = isSelected ? '#ff6b6b' : '#ffd700';
           ctx.lineWidth = isSelected ? 3 : 2;
           ctx.stroke();
+        } else if (isCityFiltered) {
+          ctx.strokeStyle = '#4a90e2';
+          ctx.lineWidth = 2;
+          ctx.stroke();
         } else {
           ctx.strokeStyle = '#fff';
           ctx.lineWidth = 1;
@@ -337,13 +359,106 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     
     // Render layers
     renderLayer(regularPoints);
+    renderLayer(cityFilteredPoints, false, false, true);
     renderLayer(selectedPoints, true);
     renderLayer(hoveredPoint, false, true);
     
     ctx.restore();
-  }, [dimensions, selectedLocations, continentColors, drawAxes]);
+  }, [dimensions, selectedLocations, cityFilteredLocations, continentColors, drawAxes]);
 
-  // Optimized mouse event handlers with throttling
+  // Center view on city tiles
+  const centerOnCityTiles = (locationIds) => {
+    if (!umapData || !scalesRef.current.xScale || locationIds.length === 0) return;
+
+    const cityPoints = umapData.umap_points.filter(p => locationIds.includes(p.location_id));
+    if (cityPoints.length === 0) return;
+
+    const { xScale, yScale } = scalesRef.current;
+    
+    // Calculate bounding box of city points in UMAP space
+    const xCoords = cityPoints.map(p => p.x);
+    const yCoords = cityPoints.map(p => p.y);
+    
+    const minX = Math.min(...xCoords);
+    const maxX = Math.max(...xCoords);
+    const minY = Math.min(...yCoords);
+    const maxY = Math.max(...yCoords);
+    
+    // Add padding
+    const xPadding = (maxX - minX) * 0.2 || 0.1;
+    const yPadding = (maxY - minY) * 0.2 || 0.1;
+    
+    const paddedMinX = minX - xPadding;
+    const paddedMaxX = maxX + xPadding;
+    const paddedMinY = minY - yPadding;
+    const paddedMaxY = maxY + yPadding;
+    
+    // Calculate required scale to fit all points
+    const plotWidth = dimensions.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
+    const plotHeight = dimensions.height - PLOT_MARGIN.top - PLOT_MARGIN.bottom;
+    
+    const scaleX = plotWidth / (xScale(paddedMaxX) - xScale(paddedMinX));
+    const scaleY = plotHeight / (yScale(paddedMinY) - yScale(paddedMaxY)); // Note: Y is inverted
+    
+    const targetScale = Math.min(scaleX, scaleY, 5); // Cap at 5x zoom
+    
+    // Calculate center point - use actual container center, not viewport center
+    const centerX = (paddedMinX + paddedMaxX) / 2;
+    const centerY = (paddedMinY + paddedMaxY) / 2;
+    
+    // Use container dimensions instead of viewport dimensions
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    const targetScreenX = containerRect ? containerRect.width / 2 : dimensions.width / 2;
+    const targetScreenY = containerRect ? containerRect.height / 2 : dimensions.height / 2;
+    
+    const targetTransformX = targetScreenX - xScale(centerX) * targetScale;
+    const targetTransformY = targetScreenY - yScale(centerY) * targetScale;
+
+    // Smooth animation to new position
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      
+      // Animation parameters
+      const startTransformX = transformRef.current.x;
+      const startTransformY = transformRef.current.y;
+      const startScale = transformRef.current.k;
+      const duration = 1000; // 1 second animation
+      const startTime = performance.now();
+      
+      // Easing function for smooth animation
+      const easeInOutCubic = (t) => {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      };
+      
+      const animate = (currentTime) => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const easedProgress = easeInOutCubic(progress);
+        
+        // Interpolate between start and target positions
+        transformRef.current.x = startTransformX + (targetTransformX - startTransformX) * easedProgress;
+        transformRef.current.y = startTransformY + (targetTransformY - startTransformY) * easedProgress;
+        transformRef.current.k = startScale + (targetScale - startScale) * easedProgress;
+        
+        // Render frame
+        renderPoints(ctx, umapData.umap_points, transformRef.current);
+        
+        // Continue animation if not complete
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          // Rebuild quadtree after animation
+          rebuildQuadtree();
+        }
+      };
+      
+      // Start animation
+      requestAnimationFrame(animate);
+    }
+  };
+
+  // Enhanced mouse event handlers with improved click/drag detection
   const handleMouseMove = useCallback((event) => {
     if (!umapData || !canvasRef.current) return;
     
@@ -356,11 +471,19 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     const inPlotArea = x >= PLOT_MARGIN.left && x <= dimensions.width - PLOT_MARGIN.right &&
                       y >= PLOT_MARGIN.top && y <= dimensions.height - PLOT_MARGIN.bottom;
     
-    // Update mouse position
+    // Update mouse position and calculate drag distance from initial mouse down position
     const currentPos = { x, y };
     
     // Handle dragging
     if (isDraggingRef.current && inPlotArea) {
+      // Calculate total drag distance from initial mouse down position
+      const totalDragDistance = Math.sqrt(
+        Math.pow(currentPos.x - mouseDownPosRef.current.x, 2) + 
+        Math.pow(currentPos.y - mouseDownPosRef.current.y, 2)
+      );
+      dragDistanceRef.current = totalDragDistance;
+      
+      // Calculate delta from last position for panning
       const deltaX = currentPos.x - lastMousePosRef.current.x;
       const deltaY = currentPos.y - lastMousePosRef.current.y;
       
@@ -454,12 +577,23 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     
     if (inPlotArea) {
       isDraggingRef.current = true;
+      dragStartTimeRef.current = performance.now();
+      dragDistanceRef.current = 0;
+      mouseDownPosRef.current = { x, y }; // Store initial mouse down position
       lastMousePosRef.current = { x, y };
     }
   }, [dimensions]);
 
   const handleMouseUp = useCallback(() => {
+    if (isDraggingRef.current) {
+      // Mouse up logic here if needed
+    }
+    
     isDraggingRef.current = false;
+    dragStartTimeRef.current = null;
+    
+    // Don't reset dragDistanceRef.current here - we need it for the click handler
+    
     // Reset cursor - will be updated in next mousemove
     if (canvasRef.current) {
       canvasRef.current.style.cursor = 'grab';
@@ -506,7 +640,20 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
   }, [umapData, renderPoints, rebuildQuadtree, dimensions]);
 
   const handleClick = useCallback((event) => {
-    if (!umapData || isDraggingRef.current) return;
+    if (!umapData) return;
+    
+    // Enhanced drag detection with better logging
+    const dragTime = dragStartTimeRef.current ? performance.now() - dragStartTimeRef.current : 0;
+    const dragDistance = dragDistanceRef.current;
+    
+    // More conservative thresholds to prevent accidental clicks during pan
+    const wasDragging = dragDistance > DRAG_THRESHOLD_PX || dragTime > DRAG_THRESHOLD_TIME;
+    
+    if (wasDragging) {
+      // Reset drag distance after checking
+      dragDistanceRef.current = 0;
+      return;
+    }
     
     const rect = canvasRef.current.getBoundingClientRect();
     const x = event.clientX - rect.left;
@@ -516,7 +663,10 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     const inPlotArea = x >= PLOT_MARGIN.left && x <= dimensions.width - PLOT_MARGIN.right &&
                       y >= PLOT_MARGIN.top && y <= dimensions.height - PLOT_MARGIN.bottom;
     
-    if (!inPlotArea) return;
+    if (!inPlotArea) {
+      dragDistanceRef.current = 0;
+      return;
+    }
     
     // Find closest point using same logic as hover
     let closestPoint = null;
@@ -552,6 +702,9 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
         }
       }));
     }
+    
+    // Reset drag distance after processing click
+    dragDistanceRef.current = 0;
   }, [umapData, onLocationSelect, dimensions]);
 
   // Tooltip functions
@@ -657,7 +810,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
         tooltip.remove();
       }
     };
-  }, [umapData, dimensions, selectedLocations, handleMouseMove, handleMouseDown, handleMouseUp, handleWheel, handleClick, buildQuadtree, renderPoints, rebuildQuadtree]);
+  }, [umapData, dimensions, selectedLocations, cityFilteredLocations, handleMouseMove, handleMouseDown, handleMouseUp, handleWheel, handleClick, buildQuadtree, renderPoints, rebuildQuadtree]);
 
   const zoomToPoint = (locationId) => {
     if (!umapData || !scalesRef.current.xScale) return;
@@ -669,9 +822,10 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
     const targetX = xScale(targetPoint.x);
     const targetY = yScale(targetPoint.y);
 
-    // Calculate target transform to center the point
-    const centerX = dimensions.width / 2;
-    const centerY = dimensions.height / 2;
+    // Calculate target transform to center the point - use actual container center
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    const centerX = containerRect ? containerRect.width / 2 : dimensions.width / 2;
+    const centerY = containerRect ? containerRect.height / 2 : dimensions.height / 2;
     
     const currentScale = transformRef.current.k;
     const targetTransformX = centerX - targetX * currentScale;
@@ -746,17 +900,16 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
 
   if (loading) {
     return (
-      <div className="umap-loading">
+      <div className="loading-state">
         <div className="spinner"></div>
         <p>Computing UMAP embeddings...</p>
-        <small>Optimizing for high-performance rendering...</small>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="umap-error">
+      <div className="loading-state">
         <p>{error}</p>
         <button onClick={fetchUmapData} className="retry-btn">
           Retry
@@ -779,9 +932,8 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, onLocationSelec
       {umapData && (
         <div className="umap-stats">
           <small>
-            {umapData.total_points.toLocaleString()} points • 
-            Canvas rendering with persistent axes • 
-            Click points to fly to location on map
+            {umapData.total_points.toLocaleString()} points
+            {cityFilteredLocations.size > 0 && ` • ${cityFilteredLocations.size} highlighted`}
           </small>
         </div>
       )}

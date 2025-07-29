@@ -11,7 +11,139 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
 
 const TILE_SIZE_METERS = 2240;
 
-// Enhanced Similarity Panel Component with Request Cancellation
+// Autocomplete Component
+function AutocompleteInput({ 
+  value, 
+  onChange, 
+  onSelect, 
+  options, 
+  placeholder, 
+  disabled = false 
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [filteredOptions, setFilteredOptions] = useState([]);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const inputRef = useRef(null);
+  const dropdownRef = useRef(null);
+
+  // Filter options based on input value
+  useEffect(() => {
+    if (!value || value.length < 1) {
+      setFilteredOptions([]);
+      setIsOpen(false);
+      return;
+    }
+
+    const filtered = options.filter(option =>
+      option.toLowerCase().includes(value.toLowerCase())
+    ).slice(0, 20); // Limit to 20 results for performance
+
+    setFilteredOptions(filtered);
+    setIsOpen(filtered.length > 0);
+    setHighlightedIndex(-1);
+  }, [value, options]);
+
+  // Handle input change
+  const handleInputChange = (e) => {
+    onChange(e.target.value);
+  };
+
+  // Handle option selection
+  const handleOptionSelect = (option) => {
+    onSelect(option);
+    setIsOpen(false);
+    setHighlightedIndex(-1);
+    inputRef.current?.blur();
+  };
+
+  // Handle keyboard navigation
+  const handleKeyDown = (e) => {
+    if (!isOpen) return;
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        setHighlightedIndex(prev => 
+          prev < filteredOptions.length - 1 ? prev + 1 : 0
+        );
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        setHighlightedIndex(prev => 
+          prev > 0 ? prev - 1 : filteredOptions.length - 1
+        );
+        break;
+      case 'Enter':
+        e.preventDefault();
+        if (highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
+          handleOptionSelect(filteredOptions[highlightedIndex]);
+        }
+        break;
+      case 'Escape':
+        setIsOpen(false);
+        setHighlightedIndex(-1);
+        inputRef.current?.blur();
+        break;
+    }
+  };
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+        setHighlightedIndex(-1);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="autocomplete-container" ref={dropdownRef}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={handleInputChange}
+        onKeyDown={handleKeyDown}
+        onFocus={() => {
+          if (filteredOptions.length > 0) setIsOpen(true);
+        }}
+        placeholder={placeholder}
+        className="autocomplete-input"
+        disabled={disabled}
+        autoComplete="off"
+      />
+      
+      {isOpen && filteredOptions.length > 0 && (
+        <div className="autocomplete-dropdown">
+          {filteredOptions.map((option, index) => (
+            <div
+              key={option}
+              className={`autocomplete-item ${index === highlightedIndex ? 'highlighted' : ''}`}
+              onClick={() => handleOptionSelect(option)}
+              onMouseEnter={() => setHighlightedIndex(index)}
+            >
+              {option}
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {isOpen && filteredOptions.length === 0 && value.length > 0 && (
+        <div className="autocomplete-dropdown">
+          <div className="autocomplete-no-results">
+            No matches found
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Enhanced Similarity Panel Component with Method Selection
 function EnhancedSimilarityPanel({ 
   selectedLocation, 
   primarySelectionId, 
@@ -23,53 +155,78 @@ function EnhancedSimilarityPanel({
   mapboxToken,
   locations
 }) {
-  const [similarityMethods, setSimilarityMethods] = useState([]);
-  const [selectedMethod, setSelectedMethod] = useState('attention_weighted');
-  const [methodsLoading, setMethodsLoading] = useState(true);
-  const [currentMethodConfig, setCurrentMethodConfig] = useState(null);
   const [paginationInfo, setPaginationInfo] = useState(null);
   const [loadingMoreResults, setLoadingMoreResults] = useState(false);
+  const [similarityMethod, setSimilarityMethod] = useState('regular');
+  // Updated to only include the two methods that exist in Qdrant
+  const [availableMethods, setAvailableMethods] = useState({
+    'regular': { 
+      name: "Regular Embeddings", 
+      description: "Standard similarity using mean-aggregated patch embeddings" 
+    },
+    'global_contrastive': { 
+      name: "Global Contrastive", 
+      description: "Dataset mean subtracted to highlight city-level differences" 
+    }
+  });
+  const [loadingMethods, setLoadingMethods] = useState(false);
   
   // Request cancellation
   const currentRequestRef = useRef(null);
   const loadMoreRequestRef = useRef(null);
 
-  // Load similarity methods on component mount
+  // Load available similarity methods on component mount - now simplified
   useEffect(() => {
-    const loadSimilarityMethods = async () => {
-      try {
-        setMethodsLoading(true);
-        const response = await fetch(`${API_BASE_URL}/api/similarity-methods`);
-        if (response.ok) {
-          const data = await response.json();
-          setSimilarityMethods(data.methods);
-          setSelectedMethod(data.recommended);
-          
-          // Find the recommended method config
-          const recommendedMethod = data.methods.find(m => m.id === data.recommended);
-          if (recommendedMethod) {
-            setCurrentMethodConfig(recommendedMethod.config);
-          }
-        } else {
-          console.error('Failed to load similarity methods');
-        }
-      } catch (error) {
-        console.error('Error loading similarity methods:', error);
-      } finally {
-        setMethodsLoading(false);
-      }
-    };
-
-    loadSimilarityMethods();
+    loadAvailableMethods();
   }, []);
 
-  // Find similar locations with selected method (initial load) - with request cancellation
-  const findSimilarLocations = async (locationId, method, offset = 0, limit = 6) => {
-    console.log('Finding similar locations for:', locationId, 'using method:', method, 'offset:', offset);
+  const loadAvailableMethods = async () => {
+    setLoadingMethods(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/methods`);
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Filter to only include the methods we actually have in Qdrant
+        const filteredMethods = {};
+        const availableKeys = ['regular', 'global_contrastive'];
+        
+        for (const key of availableKeys) {
+          if (data.available_methods[key]) {
+            filteredMethods[key] = data.available_methods[key];
+          }
+        }
+        
+        // Only update if we got valid methods, otherwise keep defaults
+        if (Object.keys(filteredMethods).length > 0) {
+          setAvailableMethods(filteredMethods);
+          console.log('📊 Loaded similarity methods:', Object.keys(filteredMethods));
+        } else {
+          console.log('📊 Using default similarity methods (API returned no valid methods)');
+        }
+      } else {
+        console.warn('⚠️ Failed to load methods from API, using defaults');
+      }
+    } catch (error) {
+      console.error('Error loading similarity methods:', error);
+      console.log('📊 Using default similarity methods due to error');
+      // Keep the default methods set in state initialization
+    } finally {
+      setLoadingMethods(false);
+    }
+  };
+
+  // Find similar locations with method parameter
+  const findSimilarLocations = async (locationId, offset = 0, limit = 6, method = similarityMethod) => {
+    console.log('Finding similar locations for:', locationId, 'method:', method, 'offset:', offset);
+    
+    // Validate method against available methods
+    if (!availableMethods[method]) {
+      return;
+    }
     
     // Cancel any existing request for initial loads (not for pagination)
     if (offset === 0 && currentRequestRef.current) {
-      console.log('🚫 Cancelling previous similarity request');
       currentRequestRef.current.abort();
       currentRequestRef.current = null;
     }
@@ -106,7 +263,7 @@ function EnhancedSimilarityPanel({
       }
       
       const data = await response.json();
-      console.log('✅ Found similar locations:', data.similar_locations.length, 'offset:', offset);
+      console.log('✅ Found similar locations:', data.similar_locations.length, 'method:', data.method_used, 'offset:', offset);
       
       // Only process results if this request wasn't cancelled
       if (!abortController.signal.aborted) {
@@ -119,11 +276,6 @@ function EnhancedSimilarityPanel({
         }
         
         setPaginationInfo(data.pagination);
-        
-        // Update current method config
-        if (data.method_config) {
-          setCurrentMethodConfig(data.method_config);
-        }
       }
     } catch (error) {
       // Don't show error for cancelled requests
@@ -156,59 +308,49 @@ function EnhancedSimilarityPanel({
     }
   };
 
-  // Load more similar locations - with cancellation support
+  // Load more similar locations with current method
   const loadMoreSimilarLocations = () => {
-    if (paginationInfo && paginationInfo.has_more && primarySelectionId && selectedMethod && !loadingMoreResults) {
-      findSimilarLocations(primarySelectionId, selectedMethod, paginationInfo.next_offset, 6);
+    if (paginationInfo && paginationInfo.has_more && primarySelectionId && !loadingMoreResults) {
+      findSimilarLocations(primarySelectionId, paginationInfo.next_offset, 6, similarityMethod);
     }
   };
 
-  // Handle method change - with immediate cancellation
+  // Handle similarity method change
   const handleMethodChange = (newMethod) => {
-    console.log('🔄 Method changed to:', newMethod);
+    console.log('🔄 Similarity method changed to:', newMethod);
     
-    // Cancel any existing requests immediately
-    if (currentRequestRef.current) {
-      console.log('🚫 Cancelling existing request due to method change');
-      currentRequestRef.current.abort();
-      currentRequestRef.current = null;
+    // Validate method
+    if (!availableMethods[newMethod]) {
+      console.error(`❌ Method '${newMethod}' not available`);
+      return;
     }
     
-    if (loadMoreRequestRef.current) {
-      console.log('🚫 Cancelling existing load more request due to method change');
-      loadMoreRequestRef.current.abort();
-      loadMoreRequestRef.current = null;
-    }
+    setSimilarityMethod(newMethod);
     
-    // Reset loading states
-    setFindingSimilar(false);
-    setLoadingMoreResults(false);
-    
-    setSelectedMethod(newMethod);
-    
-    // Update method config display
-    const methodInfo = similarityMethods.find(m => m.id === newMethod);
-    if (methodInfo) {
-      setCurrentMethodConfig(methodInfo.config);
-    }
-    
-    // Re-run similarity search if we have a primary selection (start fresh)
+    // If we have a primary selection, re-run the search with new method
     if (primarySelectionId) {
-      findSimilarLocations(primarySelectionId, newMethod, 0, 6);
+      // Cancel any existing requests
+      if (currentRequestRef.current) {
+        currentRequestRef.current.abort();
+        currentRequestRef.current = null;
+      }
+      if (loadMoreRequestRef.current) {
+        loadMoreRequestRef.current.abort();
+        loadMoreRequestRef.current = null;
+      }
+      
+      // Reset states and search with new method
+      setFindingSimilar(false);
+      setLoadingMoreResults(false);
+      setSimilarResults([]);
+      setPaginationInfo(null);
+      
+      // Start new search
+      findSimilarLocations(primarySelectionId, 0, 6, newMethod);
     }
   };
 
-  // Get method indicator color based on speed
-  const getMethodColor = (speed) => {
-    switch (speed) {
-      case 'Fast': return '#10b981'; // green
-      case 'Medium': return '#f59e0b'; // yellow
-      case 'Slow': return '#ef4444'; // red
-      default: return '#6b7280'; // gray
-    }
-  };
-
-  const getStaticMapImage = (longitude, latitude, width = 120, height = 120, zoom = 11.3) => {
+  const getStaticMapImage = (longitude, latitude, width = 140, height = 140, zoom = 11.3) => {
     if (!mapboxToken || !longitude || !latitude) {
       return '';
     }
@@ -222,9 +364,9 @@ function EnhancedSimilarityPanel({
     }
   };
 
-  // Effect to find similar locations when primary selection changes - with cancellation
+  // Effect to find similar locations when primary selection changes
   useEffect(() => {
-    if (primarySelectionId && selectedMethod && !methodsLoading) {
+    if (primarySelectionId) {
       console.log('🎯 Primary selection changed to:', primarySelectionId);
       
       // Cancel any existing requests when primary selection changes
@@ -244,9 +386,9 @@ function EnhancedSimilarityPanel({
       setFindingSimilar(false);
       setLoadingMoreResults(false);
       
-      findSimilarLocations(primarySelectionId, selectedMethod, 0, 6);
+      findSimilarLocations(primarySelectionId, 0, 6, similarityMethod);
     }
-  }, [primarySelectionId, selectedMethod, methodsLoading]);
+  }, [primarySelectionId, similarityMethod]); // Include similarityMethod in dependencies
   
   // Cleanup effect to cancel requests on unmount
   useEffect(() => {
@@ -267,13 +409,13 @@ function EnhancedSimilarityPanel({
       <div className="empty-state">
         <p>Click any location to explore similarities</p>
         <div className="empty-info">
-          <h5>AI-Powered Analysis</h5>
-          <p>Using TerraMind satellite embeddings to find visually similar urban areas based on spatial patterns and building density.</p>
-          {!methodsLoading && similarityMethods.length > 0 && (
-            <div className="method-preview">
-              <small>Available methods: {similarityMethods.length}</small>
-            </div>
-          )}
+          <h5>AI-Powered Similarity Analysis</h5>
+          <p>Using TerraMind satellite embeddings with two similarity methods to find visually similar urban areas.</p>
+          <div style={{ marginTop: '8px', fontSize: '9px', color: '#666' }}>
+            <strong>Available Methods:</strong><br/>
+            • Regular: Standard visual similarity<br/>
+            • Global Contrastive: City-level differences
+          </div>
         </div>
       </div>
     );
@@ -284,21 +426,6 @@ function EnhancedSimilarityPanel({
       {/* Selected Location Card */}
       {selectedLocation && (
         <div className="selected-card">
-          <h4>{selectedLocation.city}, {selectedLocation.country}</h4>
-          {mapboxToken && selectedLocation && (
-            <img
-              src={getStaticMapImage(selectedLocation.longitude, selectedLocation.latitude, 200, 200, 11.2)}
-              alt={`${selectedLocation.city} satellite view`}
-              className="selected-image"
-              onError={(e) => {
-                e.target.style.display = 'none';
-              }}
-            />
-          )}
-          <div className="selected-meta">
-            {selectedLocation.continent}
-            {selectedLocation.date && ` • ${selectedLocation.date}`}
-          </div>
           <button 
             className="zoom-to-location-btn"
             onClick={() => {
@@ -317,8 +444,23 @@ function EnhancedSimilarityPanel({
             }}
             title="Zoom to this location on map and UMAP"
           >
-            🎯 Zoom to Location
+            🎯Back
           </button>
+          <h4>{selectedLocation.city}, {selectedLocation.country}</h4>
+          {mapboxToken && selectedLocation && (
+            <img
+              src={getStaticMapImage(selectedLocation.longitude, selectedLocation.latitude, 140, 140, 11.5)}
+              alt={`${selectedLocation.city} satellite view`}
+              className="selected-image"
+              onError={(e) => {
+                e.target.style.display = 'none';
+              }}
+            />
+          )}
+          <div className="selected-meta">
+            {selectedLocation.continent}
+            {selectedLocation.date && ` • ${selectedLocation.date}`}
+          </div>
         </div>
       )}
 
@@ -336,129 +478,124 @@ function EnhancedSimilarityPanel({
             )}
           </div>
           
-          {/* Similarity Method Selector */}
-          {!methodsLoading && similarityMethods.length > 0 && (
-            <div className="method-selector">
-              <label className="method-label">Similarity Method:</label>
-              <select 
-                value={selectedMethod} 
-                onChange={(e) => handleMethodChange(e.target.value)}
-                className="method-dropdown"
-                disabled={findingSimilar}
-              >
-                {similarityMethods.map((method) => (
-                  <option key={method.id} value={method.id}>
-                    {method.config.name}
-                  </option>
-                ))}
-              </select>
-              
-              {/* Method Info Display */}
-              {currentMethodConfig && (
-                <div className="method-info">
-                  <div className="method-badges">
-                    <span 
-                      className="method-badge speed-badge"
-                      style={{ backgroundColor: getMethodColor(currentMethodConfig.speed) }}
-                    >
-                      {currentMethodConfig.speed}
-                    </span>
-                    <span className="method-badge quality-badge">
-                      {currentMethodConfig.quality} Quality
-                    </span>
-                  </div>
-                  <p className="method-description">
-                    {currentMethodConfig.description}
-                  </p>
+          {/* Similarity Method Selector - Updated with better descriptions */}
+          <div className="method-selector">
+            <label className="method-label">Similarity Method:</label>
+            <select 
+              value={similarityMethod} 
+              onChange={(e) => handleMethodChange(e.target.value)}
+              className="method-dropdown"
+              disabled={loadingMethods || findingSimilar}
+            >
+              {Object.entries(availableMethods).map(([key, method]) => (
+                <option key={key} value={key}>
+                  {method.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          {/* Method Description - Enhanced with more detailed info */}
+          {availableMethods[similarityMethod] && (
+            <div className="method-info-enhanced">
+              <div className="method-badge-enhanced">
+                {availableMethods[similarityMethod].name}
+              </div>
+              <p className="method-description-enhanced">
+                {availableMethods[similarityMethod].description}
+              </p>
+              {similarityMethod === 'regular' && (
+                <div style={{ fontSize: '7px', color: '#6b7280', marginTop: '2px' }}>
+                  Best for: General visual similarity
+                </div>
+              )}
+              {similarityMethod === 'global_contrastive' && (
+                <div style={{ fontSize: '7px', color: '#6b7280', marginTop: '2px' }}>
+                  Best for: Finding unique city characteristics
                 </div>
               )}
             </div>
           )}
           
-          {findingSimilar ? (
-            <div className="loading-state">
-              <div className="spinner"></div>
-              <div className="loading-text">
-                {currentMethodConfig?.speed === 'Slow' 
-                  ? `Computing visual similarities using ${currentMethodConfig?.name}... This may take a moment for best quality results.`
-                  : `Finding similar locations using ${currentMethodConfig?.name || selectedMethod}...`
-                }
-              </div>
-              {currentMethodConfig?.speed === 'Slow' && (
-                <div className="loading-subtext">
-                  💡 High-quality methods analyze all 196 image patches for the best visual similarity
+          {/* Scrollable Similarity Content */}
+          <div className="similarity-content">
+            {findingSimilar ? (
+              <div className="loading-state">
+                <div className="spinner"></div>
+                <div className="loading-text">
+                  Finding similar locations using {availableMethods[similarityMethod]?.name || similarityMethod}...
                 </div>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="similarity-grid">
-                {similarResults.map((location, index) => {
-                  const similarity = (location.similarity_score * 100).toFixed(1);
-                  const imageUrl = getStaticMapImage(location.longitude, location.latitude, 120, 120, 11.3);
-                  
-                  return (
-                    <div 
-                      key={`${location.id}-${index}`}
-                      className="similarity-tile"
-                      onClick={() => onNavigationClick(location)}
-                      title={`${location.city}, ${location.country} - ${similarity}% similar`}
-                    >
-                      {mapboxToken && imageUrl ? (
-                        <img
-                          src={imageUrl}
-                          alt={`${location.city} satellite view`}
-                          className="similarity-image"
-                          onError={(e) => {
-                            e.target.parentElement.innerHTML = `
-                              <div class="loading-placeholder">
-                                <div>${location.city}</div>
-                              </div>
-                              <div class="similarity-score">${similarity}%</div>
-                              <div class="similarity-label">${location.city}, ${location.country}</div>
-                            `;
-                          }}
-                        />
-                      ) : (
-                        <div className="loading-placeholder">
-                          {location.city}
+              </div>
+            ) : (
+              <>
+                <div className="similarity-grid">
+                  {similarResults.map((location, index) => {
+                    const similarity = (location.similarity_score * 100).toFixed(1);
+                    const imageUrl = getStaticMapImage(location.longitude, location.latitude, 140, 140, 11.3);
+                    
+                    return (
+                      <div 
+                        key={`${location.id}-${index}`}
+                        className="similarity-tile"
+                        onClick={() => onNavigationClick(location)}
+                        title={`${location.city}, ${location.country} - ${similarity}% similar using ${availableMethods[similarityMethod]?.name || similarityMethod}`}
+                      >
+                        {mapboxToken && imageUrl ? (
+                          <img
+                            src={imageUrl}
+                            alt={`${location.city} satellite view`}
+                            className="similarity-image"
+                            onError={(e) => {
+                              e.target.parentElement.innerHTML = `
+                                <div class="loading-placeholder">
+                                  <div>${location.city}</div>
+                                </div>
+                                <div class="similarity-score">${similarity}%</div>
+                                <div class="similarity-label">${location.city}, ${location.country}</div>
+                              `;
+                            }}
+                          />
+                        ) : (
+                          <div className="loading-placeholder">
+                            {location.city}
+                          </div>
+                        )}
+                        <div className="similarity-score">{similarity}%</div>
+                        <div className="similarity-label">
+                          {location.city}, {location.country}
                         </div>
-                      )}
-                      <div className="similarity-score">{similarity}%</div>
-                      <div className="similarity-label">
-                        {location.city}, {location.country}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-              
-              {/* Load More Button */}
-              {paginationInfo && paginationInfo.has_more && (
-                <button 
-                  className="show-more"
-                  onClick={loadMoreSimilarLocations}
-                  disabled={loadingMoreResults}
-                >
-                  {loadingMoreResults ? (
-                    <>
-                      <div className="button-spinner"></div>
-                      Loading more...
-                    </>
-                  ) : (
-                    <>Show {Math.min(6, paginationInfo.total_results - similarResults.length)} more</>
-                  )}
-                </button>
-              )}
-              
-              {/* Results Summary */}
-              {paginationInfo && !paginationInfo.has_more && similarResults.length > 6 && (
-                <div className="results-summary">
-                  Showing all {similarResults.length} results using {currentMethodConfig?.name}
+                    );
+                  })}
                 </div>
-              )}
-            </>
-          )}
+                
+                {/* Load More Button */}
+                {paginationInfo && paginationInfo.has_more && (
+                  <button 
+                    className="show-more"
+                    onClick={loadMoreSimilarLocations}
+                    disabled={loadingMoreResults}
+                  >
+                    {loadingMoreResults ? (
+                      <>
+                        <div className="button-spinner"></div>
+                        Loading more...
+                      </>
+                    ) : (
+                      <>Show {Math.min(6, paginationInfo.total_results - similarResults.length)} more</>
+                    )}
+                  </button>
+                )}
+                
+                {/* Results Summary */}
+                {paginationInfo && !paginationInfo.has_more && similarResults.length > 6 && (
+                  <div className="results-summary">
+                    Showing all {similarResults.length} results using {availableMethods[similarityMethod]?.name || similarityMethod}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
     </>
@@ -478,6 +615,15 @@ function ModernApp() {
   const [error, setError] = useState(null);
   const [mapboxToken, setMapboxToken] = useState('');
   const [stats, setStats] = useState(null);
+  
+  // Enhanced City/Country selection state with autocomplete
+  const [cityFilteredLocations, setCityFilteredLocations] = useState(new Set());
+  const [selectedCountry, setSelectedCountry] = useState('');
+  const [selectedCity, setSelectedCity] = useState('');
+  const [countryInput, setCountryInput] = useState('');
+  const [cityInput, setCityInput] = useState('');
+  const [allCountries, setAllCountries] = useState([]);
+  const [availableCities, setAvailableCities] = useState([]); // Cities filtered by selected country
 
   // Initialize app
   useEffect(() => {
@@ -527,12 +673,50 @@ function ModernApp() {
       if (!response.ok) throw new Error('Failed to load locations');
       const locationData = await response.json();
       setLocations(locationData);
+      
+      // Extract unique countries and cities for autocomplete
+      const uniqueCountries = [...new Set(locationData.map(loc => loc.country))].sort();
+      const allCitiesWithCountry = locationData.map(loc => ({
+        city: loc.city,
+        country: loc.country,
+        cityCountry: `${loc.city}, ${loc.country}`
+      }));
+      
+      setAllCountries(uniqueCountries);
+      
       console.log(`Loaded ${locationData.length} locations`);
+      console.log(`Found ${uniqueCountries.length} unique countries`);
     } catch (error) {
       console.error('Error loading locations:', error);
       setError('Failed to load locations');
     }
   };
+
+  // Update available cities when country selection changes
+  useEffect(() => {
+    if (selectedCountry) {
+      // Filter cities by selected country
+      const citiesInCountry = locations
+        .filter(loc => loc.country === selectedCountry)
+        .map(loc => loc.city);
+      const uniqueCitiesInCountry = [...new Set(citiesInCountry)].sort();
+      setAvailableCities(uniqueCitiesInCountry);
+    } else {
+      // Show all cities when no country is selected
+      const allCities = [...new Set(locations.map(loc => `${loc.city}, ${loc.country}`))].sort();
+      setAvailableCities(allCities);
+    }
+  }, [selectedCountry, locations]);
+
+  // Trigger UMAP highlighting immediately when city/country filter changes
+  useEffect(() => {
+    if (cityFilteredLocations.size > 0) {
+      // Immediately center UMAP on filtered locations without waiting for hover
+      window.dispatchEvent(new CustomEvent('centerOnCityTiles', {
+        detail: { locationIds: Array.from(cityFilteredLocations) }
+      }));
+    }
+  }, [cityFilteredLocations]);
 
   const createTilePolygon = (centerLng, centerLat, sizeMeters) => {
     const metersPerDegreeLat = 111320;
@@ -577,11 +761,137 @@ function ModernApp() {
     setCurrentSelectedLocation(null);
     setPrimarySelectionId(null);
     setSimilarResults([]);
+    // Don't clear city/country filters - they remain independent
+  };
+
+  const clearCitySelection = () => {
+    setCityFilteredLocations(new Set());
+    setSelectedCity('');
+    setSelectedCountry('');
+    setCityInput('');
+    setCountryInput('');
+  };
+
+  // Handle country selection with autocomplete
+  const handleCountrySelect = (country) => {
+    console.log('Country selected:', country);
+    setSelectedCountry(country);
+    setCountryInput(country);
+    setSelectedCity(''); // Clear city selection when country changes
+    setCityInput(''); // Clear city input when country changes
+    
+    // Find all locations for this country
+    const countryLocations = locations.filter(loc => loc.country === country);
+    const countryLocationIds = new Set(countryLocations.map(loc => loc.id));
+    
+    setCityFilteredLocations(countryLocationIds);
+    
+    // Calculate bounding box for all tiles in this country
+    if (countryLocations.length > 0) {
+      const lons = countryLocations.map(loc => loc.longitude);
+      const lats = countryLocations.map(loc => loc.latitude);
+      
+      const bbox = {
+        minLon: Math.min(...lons),
+        maxLon: Math.max(...lons),
+        minLat: Math.min(...lats),
+        maxLat: Math.max(...lats)
+      };
+      
+      // Add padding to bbox
+      const lonPadding = (bbox.maxLon - bbox.minLon) * 0.1 || 0.01;
+      const latPadding = (bbox.maxLat - bbox.minLat) * 0.1 || 0.01;
+      
+      // Zoom map to bbox
+      window.dispatchEvent(new CustomEvent('zoomToBbox', {
+        detail: { 
+          bbox: {
+            minLon: bbox.minLon - lonPadding,
+            maxLon: bbox.maxLon + lonPadding,
+            minLat: bbox.minLat - latPadding,
+            maxLat: bbox.maxLat + latPadding
+          }
+        }
+      }));
+    }
+  };
+
+  // Handle city selection with autocomplete
+  const handleCitySelect = (citySelection) => {
+    console.log('City selected:', citySelection);
+    
+    let city, country;
+    
+    if (selectedCountry && !citySelection.includes(',')) {
+      // If a country is already selected and city doesn't contain comma, it's just a city name
+      city = citySelection;
+      country = selectedCountry;
+    } else {
+      // Parse "City, Country" format
+      const parts = citySelection.split(', ');
+      if (parts.length >= 2) {
+        city = parts[0];
+        country = parts.slice(1).join(', '); // Handle countries with commas
+      } else {
+        console.warn('Invalid city selection format:', citySelection);
+        return;
+      }
+    }
+    
+    setSelectedCity(city);
+    setCityInput(citySelection);
+    
+    // If country wasn't already selected, select it now
+    if (!selectedCountry) {
+      setSelectedCountry(country);
+      setCountryInput(country);
+    }
+    
+    // Find all locations for this specific city
+    const cityLocations = locations.filter(loc => 
+      loc.city === city && loc.country === country
+    );
+    const cityLocationIds = new Set(cityLocations.map(loc => loc.id));
+    
+    setCityFilteredLocations(cityLocationIds);
+    
+    // Calculate bounding box for all tiles in this city
+    if (cityLocations.length > 0) {
+      const lons = cityLocations.map(loc => loc.longitude);
+      const lats = cityLocations.map(loc => loc.latitude);
+      
+      const bbox = {
+        minLon: Math.min(...lons),
+        maxLon: Math.max(...lons),
+        minLat: Math.min(...lats),
+        maxLat: Math.max(...lats)
+      };
+      
+      // Add padding to bbox
+      const lonPadding = (bbox.maxLon - bbox.minLon) * 0.1 || 0.01;
+      const latPadding = (bbox.maxLat - bbox.minLat) * 0.1 || 0.01;
+      
+      // Zoom map to bbox
+      window.dispatchEvent(new CustomEvent('zoomToBbox', {
+        detail: { 
+          bbox: {
+            minLon: bbox.minLon - lonPadding,
+            maxLon: bbox.maxLon + lonPadding,
+            minLat: bbox.minLat - latPadding,
+            maxLat: bbox.maxLat + latPadding
+          }
+        }
+      }));
+    }
   };
 
   // Primary selection - triggers similarity search and UMAP centering
+  // This overrides city/country selection when user clicks individual tiles
   const handlePrimarySelection = (locationId) => {
     console.log('Primary selection:', locationId);
+    
+    // Clear city/country selection when user selects individual tile
+    clearCitySelection();
     
     const newSelected = new Set();
     let newCurrentLocation = null;
@@ -650,26 +960,74 @@ function ModernApp() {
 
   return (
     <div className="app">
-      {/* Enhanced Header */}
+      {/* Enhanced Header with Autocomplete City/Country Selector */}
       <header className="header">
         <div className="header-content">
-          <div>
-            <h1>🛰️ Enhanced Satellite Embeddings Explorer</h1>
-            <div className="header-stats">
-              {totalLocations} locations • {stats?.embedding_dimension}D TerraMind embeddings
-              {stats?.available_similarity_methods && ` • ${stats.available_similarity_methods} similarity methods`}
-              {stats?.locations_with_full_patches && ` • ${stats.locations_with_full_patches} with full patches`}
-            </div>
+          <div className="header-left">
+            <h1>🛰️ Satellite Embeddings Explorer</h1>
           </div>
-          <div className="selection-info">
-            <span>{selectedLocations.size} selected</span>
-            <button 
-              className="clear-btn" 
-              disabled={selectedLocations.size === 0}
-              onClick={clearSelection}
-            >
-              Clear
-            </button>
+          
+          <div className="header-center">
+            {/* Enhanced City/Country Selector with Autocomplete */}
+            <div className="location-selector">
+              <div className="selector-group">
+                <label>Country:</label>
+                <AutocompleteInput
+                  value={countryInput}
+                  onChange={setCountryInput}
+                  onSelect={handleCountrySelect}
+                  options={allCountries}
+                  placeholder="Type country..."
+                />
+              </div>
+              
+              <div className="selector-group">
+                <label>City:</label>
+                <AutocompleteInput
+                  value={cityInput}
+                  onChange={setCityInput}
+                  onSelect={handleCitySelect}
+                  options={availableCities}
+                  placeholder={selectedCountry ? "Type city..." : "Type city, country..."}
+                  disabled={allCountries.length === 0}
+                />
+              </div>
+              
+              {(selectedCity || selectedCountry) && (
+                <button 
+                  className="clear-filter-btn" 
+                  onClick={clearCitySelection}
+                  title="Clear location filter"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            
+            {/* Selection Info */}
+            {(selectedCity || selectedCountry) && (
+              <div className="filter-info">
+                <span className="filter-label">
+                  {selectedCity ? `City: ${selectedCity}, ${selectedCountry}` : `Country: ${selectedCountry}`}
+                </span>
+                <span className="filter-count">
+                  {cityFilteredLocations.size} tiles
+                </span>
+              </div>
+            )}
+          </div>
+          
+          <div className="header-right">
+            <div className="selection-info">
+              <span>{selectedLocations.size} selected</span>
+              <button 
+                className="clear-btn" 
+                disabled={selectedLocations.size === 0}
+                onClick={clearSelection}
+              >
+                Clear
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -686,6 +1044,7 @@ function ModernApp() {
             <MapView
               locations={locations}
               selectedLocations={selectedLocations}
+              cityFilteredLocations={cityFilteredLocations}
               onLocationSelect={handlePrimarySelection}
               mapboxToken={mapboxToken}
             />
@@ -702,6 +1061,7 @@ function ModernApp() {
             <HighPerformanceUMapView
               locations={locations}
               selectedLocations={selectedLocations}
+              cityFilteredLocations={cityFilteredLocations}
               onLocationSelect={handlePrimarySelection}
             />
           </div>
@@ -710,7 +1070,7 @@ function ModernApp() {
         {/* Enhanced Analysis Panel */}
         <div className="analysis-panel">
           <div className="analysis-header">
-            <h3>Enhanced Analysis</h3>
+            <h3>Similarity Analysis</h3>
           </div>
           <div className="analysis-content">
             <EnhancedSimilarityPanel

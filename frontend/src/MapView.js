@@ -1,15 +1,15 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 
-// Fallback tile size for locations without exact boundaries (224 pixels × 10m/pixel = 2240 meters)
+// Fallback tile size for locations without exact boundaries
 const FALLBACK_TILE_SIZE_METERS = 2240;
 
-const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }) => {
+const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocationSelect, mapboxToken }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const hoveredLocationId = useRef(null);
   const currentPopup = useRef(null);
-  const [tileBoundsCache, setTileBoundsCache] = useState(new Map());
+  const [boundsStats, setBoundsStats] = useState({ exact: 0, fallback: 0 });
 
   const API_BASE_URL = process.env.NODE_ENV === 'production' 
     ? 'https://your-domain.com'
@@ -31,9 +31,8 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
     map.current.addControl(new mapboxgl.NavigationControl());
 
     map.current.on('load', () => {
-      console.log('Map loaded successfully');
       if (locations.length > 0) {
-        loadTileBoundsAndAddToMap();
+        addLocationsToMapWithBounds();
       }
     });
 
@@ -49,16 +48,23 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
       }
     });
 
-    // Listen for zoom events from similarity panel
+    // Listen for zoom events
     const handleZoomToLocation = (event) => {
       const { longitude, latitude, id } = event.detail;
       zoomToLocation(longitude, latitude, id);
     };
 
+    const handleZoomToBbox = (event) => {
+      const { bbox } = event.detail;
+      zoomToBbox(bbox);
+    };
+
     window.addEventListener('zoomToLocation', handleZoomToLocation);
+    window.addEventListener('zoomToBbox', handleZoomToBbox);
 
     return () => {
       window.removeEventListener('zoomToLocation', handleZoomToLocation);
+      window.removeEventListener('zoomToBbox', handleZoomToBbox);
       if (currentPopup.current) {
         currentPopup.current.remove();
       }
@@ -72,82 +78,77 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
   // Add locations to map when both map and locations are ready
   useEffect(() => {
     if (map.current && map.current.isStyleLoaded() && locations.length > 0) {
-      loadTileBoundsAndAddToMap();
+      addLocationsToMapWithBounds();
     }
   }, [locations]);
 
-  // Load tile bounds for all locations and add to map
-  const loadTileBoundsAndAddToMap = async () => {
+  const addLocationsToMapWithBounds = () => {
     if (!locations.length) return;
-
-    console.log('Loading tile boundaries for', locations.length, 'locations...');
     
-    // Get exact tile boundaries for all locations
-    const boundsPromises = locations.map(async (location) => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/tile-bounds/${location.id}`);
-        if (response.ok) {
-          const data = await response.json();
-          return {
-            locationId: location.id,
-            bounds: data.tile_bounds,
-            hasExactBounds: data.has_exact_bounds
-          };
-        }
-      } catch (error) {
-        console.warn(`Failed to get tile bounds for location ${location.id}:`, error);
+    // Track bounds statistics
+    let exactBoundsCount = 0;
+    let fallbackBoundsCount = 0;
+    
+    // Create tile features with exact or fallback bounds
+    const tileFeatures = locations.map(location => {
+      let tileCoords;
+      let hasExactBounds = false;
+      
+      // Check if location has exact tile bounds
+      if (location.tile_bounds && location.has_exact_bounds && Array.isArray(location.tile_bounds)) {
+        // Use exact bounds from the data
+        tileCoords = location.tile_bounds;
+        hasExactBounds = true;
+        exactBoundsCount++;
+      } else {
+        // Use fallback bounds around centroid
+        tileCoords = createFallbackTilePolygon(
+          location.longitude, 
+          location.latitude, 
+          FALLBACK_TILE_SIZE_METERS
+        );
+        fallbackBoundsCount++;
       }
+
       return {
-        locationId: location.id,
-        bounds: null,
-        hasExactBounds: false
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [tileCoords]
+        },
+        properties: { 
+          ...location,
+          hasExactBounds,
+          boundsType: hasExactBounds ? 'exact' : 'fallback'
+        }
       };
     });
 
-    const boundsResults = await Promise.all(boundsPromises);
-    
-    // Create cache of tile bounds
-    const newCache = new Map();
-    boundsResults.forEach(result => {
-      newCache.set(result.locationId, result);
-    });
-    setTileBoundsCache(newCache);
-
-    // Add locations to map with tile boundaries
-    addLocationsToMap(newCache);
-  };
-
-  // Update styles when selection changes
-  const updateTileStyles = useCallback(() => {
-    if (map.current && map.current.getLayer('tiles-fill')) {
-      map.current.setPaintProperty('tiles-fill', 'fill-color', [
-        'case',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b',
-        'transparent'
-      ]);
-
-      map.current.setPaintProperty('tiles-border', 'line-color', [
-        'case',
-        ['==', ['get', 'id'], hoveredLocationId.current || -1],
-        '#4ecdc4',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b',
-        'rgba(255, 255, 255, 0.4)'
-      ]);
-
-      map.current.setPaintProperty('points-layer', 'circle-color', [
-        'case',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b',
-        '#4ecdc4'
-      ]);
+    // Add tile source
+    if (map.current.getSource('tiles')) {
+      map.current.getSource('tiles').setData({
+        type: 'FeatureCollection',
+        features: tileFeatures
+      });
+    } else {
+      map.current.addSource('tiles', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: tileFeatures
+        }
+      });
     }
-  }, [selectedLocations]);
 
-  useEffect(() => {
-    updateTileStyles();
-  }, [selectedLocations, updateTileStyles]);
+    // Add layers if they don't exist
+    if (!map.current.getLayer('tiles-fill')) {
+      addMapLayers();
+      addMapEventListeners();
+    }
+
+    // Update bounds statistics
+    setBoundsStats({ exact: exactBoundsCount, fallback: fallbackBoundsCount });
+  };
 
   const createFallbackTilePolygon = (centerLng, centerLat, sizeMeters) => {
     const metersPerDegreeLat = 111320;
@@ -165,132 +166,71 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
     ];
   };
 
-  const addLocationsToMap = (boundsCache) => {
-    if (!map.current || !locations.length) return;
+  // Update styles when selection or city filter changes
+  const updateTileStyles = useCallback(() => {
+    if (map.current && map.current.getLayer('tiles-fill')) {
+      // Fill color styling
+      map.current.setPaintProperty('tiles-fill', 'fill-color', [
+        'case',
+        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
+        '#ff6b6b', // Selected locations - red
+        ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
+        '#4a90e2', // City filtered locations - blue
+        'transparent'
+      ]);
 
-    console.log('Adding', locations.length, 'locations to map with tile boundaries...');
+      map.current.setPaintProperty('tiles-fill', 'fill-opacity', [
+        'case',
+        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
+        0.6, // Selected locations
+        ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
+        0.4, // City filtered locations
+        0
+      ]);
 
-    // Create tile polygons using exact boundaries where available
-    const tileFeatures = locations.map(location => {
-      const boundsInfo = boundsCache.get(location.id);
-      let tileCoords;
+      // Unified border styling - white with transparency for all tiles
+      map.current.setPaintProperty('tiles-border', 'line-color', [
+        'case',
+        ['==', ['get', 'id'], hoveredLocationId.current || -1],
+        '#4ecdc4', // Hovered - light blue
+        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
+        '#ff6b6b', // Selected - red
+        ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
+        '#4a90e2', // City filtered - blue
+        'rgba(255, 255, 255, 0.6)' // Default - white with transparency
+      ]);
 
-      if (boundsInfo && boundsInfo.bounds && boundsInfo.hasExactBounds) {
-        // Use exact tile boundary coordinates
-        tileCoords = boundsInfo.bounds;
-        console.log(`Using exact bounds for ${location.city}: ${tileCoords.length} coordinates`);
-      } else {
-        // Fallback to estimated tile boundary around centroid
-        tileCoords = createFallbackTilePolygon(
-          location.longitude, 
-          location.latitude, 
-          FALLBACK_TILE_SIZE_METERS
-        );
-      }
+      map.current.setPaintProperty('tiles-border', 'line-width', [
+        'case',
+        ['==', ['get', 'id'], hoveredLocationId.current || -1],
+        3, // Hovered
+        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
+        2, // Selected
+        ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
+        2, // City filtered
+        1.5 // Default
+      ]);
 
-      return {
-        type: 'Feature',
-        geometry: {
-          type: 'Polygon',
-          coordinates: [tileCoords]
-        },
-        properties: { 
-          ...location,
-          hasExactBounds: boundsInfo ? boundsInfo.hasExactBounds : false
-        }
-      };
-    });
-
-    // Create point features
-    const pointFeatures = locations.map(location => ({
-      type: 'Feature',
-      geometry: {
-        type: 'Point',
-        coordinates: [location.longitude, location.latitude]
-      },
-      properties: { ...location }
-    }));
-
-    // Add sources
-    if (map.current.getSource('tiles')) {
-      map.current.getSource('tiles').setData({
-        type: 'FeatureCollection',
-        features: tileFeatures
-      });
-    } else {
-      map.current.addSource('tiles', {
-        type: 'geojson',
-        data: {
-          type: 'FeatureCollection',
-          features: tileFeatures
-        }
-      });
+      // Unified dash pattern - solid lines for all tiles
+      map.current.setPaintProperty('tiles-border', 'line-dasharray', [
+        'literal', [] // Solid line for all tiles
+      ]);
     }
+  }, [selectedLocations, cityFilteredLocations]);
 
-    if (map.current.getSource('points')) {
-      map.current.getSource('points').setData({
-        type: 'FeatureCollection',
-        features: pointFeatures
-      });
-    } else {
-      map.current.addSource('points', {
-        type: 'geojson',
-        data: {
-          type: 'FeatureCollection',
-          features: pointFeatures
-        }
-      });
-    }
-
-    // Add layers if they don't exist
-    if (!map.current.getLayer('tiles-fill')) {
-      addMapLayers();
-      addMapEventListeners();
-    }
-
-    // Log summary
-    const exactBoundsCount = tileFeatures.filter(f => f.properties.hasExactBounds).length;
-    console.log(`Added ${tileFeatures.length} tiles to map:`);
-    console.log(`- ${exactBoundsCount} with exact boundaries`);
-    console.log(`- ${tileFeatures.length - exactBoundsCount} with estimated boundaries`);
-  };
+  useEffect(() => {
+    updateTileStyles();
+  }, [selectedLocations, cityFilteredLocations, updateTileStyles]);
 
   const addMapLayers = () => {
-    // Add exact bounds indicator layer first (bottom)
-    map.current.addLayer({
-      id: 'tiles-exact-indicator',
-      type: 'line',
-      source: 'tiles',
-      paint: {
-        'line-color': [
-          'case',
-          ['get', 'hasExactBounds'],
-          '#10b981', // green for exact bounds
-          'transparent'
-        ],
-        'line-width': 1,
-        'line-dasharray': [2, 2],
-        'line-opacity': 0.7
-      }
-    });
-
+    // Add tile fill layer
     map.current.addLayer({
       id: 'tiles-fill',
       type: 'fill',
       source: 'tiles',
       paint: {
-        'fill-color': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          '#ff6b6b',
-          'transparent'
-        ],
-        'fill-opacity': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          0.6,
-          0
-        ]
+        'fill-color': 'transparent',
+        'fill-opacity': 0
       }
     });
 
@@ -299,54 +239,28 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
       type: 'line',
       source: 'tiles',
       paint: {
-        'line-color': [
-          'case',
-          ['==', ['get', 'id'], hoveredLocationId.current || -1],
-          '#4ecdc4',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          '#ff6b6b',
-          'rgba(255, 255, 255, 0.4)'
-        ],
-        'line-width': [
-          'case',
-          ['==', ['get', 'id'], hoveredLocationId.current || -1],
-          3,
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          2,
-          1
-        ]
-      }
-    });
-
-    map.current.addLayer({
-      id: 'points-layer',
-      type: 'circle',
-      source: 'points',
-      paint: {
-        'circle-color': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          '#ff6b6b',
-          '#4ecdc4'
-        ],
-        'circle-radius': [
-          'case',
-          ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-          8,
-          6
-        ],
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#ffffff'
+        'line-color': 'rgba(255, 255, 255, 0.6)',
+        'line-width': 1.5,
+        'line-dasharray': []
       }
     });
   };
 
   const addMapEventListeners = () => {
-    // Tile interactions
+    // Tile interactions - Fixed hover detection
     map.current.on('mouseenter', 'tiles-fill', (e) => {
       map.current.getCanvas().style.cursor = 'pointer';
       hoveredLocationId.current = e.features[0].properties.id;
       updateTileStyles();
+    });
+
+    map.current.on('mousemove', 'tiles-fill', (e) => {
+      // Update hovered ID as mouse moves between tiles
+      const newHoveredId = e.features[0].properties.id;
+      if (hoveredLocationId.current !== newHoveredId) {
+        hoveredLocationId.current = newHoveredId;
+        updateTileStyles();
+      }
     });
 
     map.current.on('mouseleave', 'tiles-fill', () => {
@@ -358,17 +272,10 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
     map.current.on('click', 'tiles-fill', (e) => {
       const locationId = e.features[0].properties.id;
       onLocationSelect(locationId);
-      showLocationPopup(
+      showEnhancedLocationPopup(
         [e.features[0].properties.longitude, e.features[0].properties.latitude],
         e.features[0].properties
       );
-    });
-
-    // Point interactions
-    map.current.on('click', 'points-layer', (e) => {
-      const locationId = e.features[0].properties.id;
-      onLocationSelect(locationId);
-      showLocationPopup(e.features[0].geometry.coordinates, e.features[0].properties);
     });
   };
 
@@ -382,12 +289,22 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
     setTimeout(() => {
       const location = locations.find(loc => loc.id === locationId);
       if (location) {
-        showLocationPopup([longitude, latitude], location);
+        showEnhancedLocationPopup([longitude, latitude], location);
       }
     }, 1200);
   };
 
-  const showLocationPopup = (coordinates, properties) => {
+  const zoomToBbox = (bbox) => {
+    map.current.fitBounds([
+      [bbox.minLon, bbox.minLat],
+      [bbox.maxLon, bbox.maxLat]
+    ], {
+      padding: 50,
+      duration: 1000
+    });
+  };
+
+  const showEnhancedLocationPopup = (coordinates, properties) => {
     // Close existing popup
     if (currentPopup.current) {
       currentPopup.current.remove();
@@ -395,48 +312,77 @@ const MapView = ({ locations, selectedLocations, onLocationSelect, mapboxToken }
     }
 
     const isSelected = selectedLocations.has(properties.id);
-    const boundsInfo = tileBoundsCache.get(properties.id);
-    const hasExactBounds = boundsInfo ? boundsInfo.hasExactBounds : false;
+    const isCityFiltered = cityFilteredLocations.has(properties.id);
+
+    let statusIcon = '';
+    if (isSelected) {
+      statusIcon = '✓';
+    } else if (isCityFiltered) {
+      statusIcon = '🏙️';
+    }
 
     const popupHtml = `
-      <div class="popup-content">
-        <h4>${properties.city} ${isSelected ? '✓' : ''}</h4>
-        <div class="popup-item">
-          <span class="popup-label">Country:</span> ${properties.country}
+      <div style="font-size: 10px; line-height: 1.2; max-width: 160px;">
+        <div style="font-weight: 600; color: #1e293b; margin-bottom: 2px;">
+          ${properties.city} ${statusIcon}
         </div>
-        <div class="popup-item">
-          <span class="popup-label">Continent:</span> ${properties.continent}
+        <div style="color: #64748b; margin-bottom: 3px;">
+          ${properties.country}
         </div>
-        <div class="popup-item">
-          <span class="popup-label">Status:</span> ${isSelected ? 'Selected' : 'Not selected'}
-        </div>
-        <div class="popup-item">
-          <span class="popup-label">Boundary:</span> ${hasExactBounds ? 'Exact tile bounds' : 'Estimated bounds'}
-        </div>
-        ${properties.date ? `<div class="popup-item">
-          <span class="popup-label">Date:</span> ${properties.date}
-        </div>` : ''}
       </div>
     `;
 
-    // Create new popup with smaller size and less intrusive styling
+    // Create popup
     currentPopup.current = new mapboxgl.Popup({
-      closeButton: true,
-      closeOnClick: false, // We handle this manually
+      closeButton: false,
+      closeOnClick: false,
       focusAfterOpen: false,
-      maxWidth: '240px' // Make it slightly larger to accommodate boundary info
+      maxWidth: '180px',
+      className: 'enhanced-popup'
     })
       .setLngLat(coordinates)
       .setHTML(popupHtml)
       .addTo(map.current);
 
-    // Clear reference when popup is closed
+    // Auto-close popup after 4 seconds
+    setTimeout(() => {
+      if (currentPopup.current) {
+        currentPopup.current.remove();
+        currentPopup.current = null;
+      }
+    }, 4000);
+
     currentPopup.current.on('close', () => {
       currentPopup.current = null;
     });
   };
 
-  return <div ref={mapContainer} className="map-view" />;
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={mapContainer} className="map-view" />
+      
+      {/* Simplified Statistics Overlay */}
+      {boundsStats.exact + boundsStats.fallback > 0 && (
+        <div style={{
+          position: 'absolute',
+          bottom: '10px',
+          left: '10px',
+          background: 'rgba(0, 0, 0, 0.8)',
+          color: 'white',
+          padding: '6px 10px',
+          borderRadius: '4px',
+          fontSize: '10px',
+          fontFamily: 'monospace',
+          backdropFilter: 'blur(4px)',
+          zIndex: 1000
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ color: '#fff' }}>{(boundsStats.exact + boundsStats.fallback).toLocaleString()} tiles</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default MapView;
