@@ -7,7 +7,7 @@ import HelpPanel, { WelcomePanel } from './HelpPanel';
 import polyline from '@mapbox/polyline';
 
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? process.env.REACT_APP_API_URL || 'https://your-railway-url.up.railway.app'
+  ? process.env.REACT_APP_API_URL || 'http://localhost:8000'
   : 'http://localhost:8000';
 
 const TILE_SIZE_METERS = 2240;
