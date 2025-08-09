@@ -163,9 +163,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://urban-embeddings-explorer.vercel.app/",
-        "https://urban-embeddings-explorer-git-main-jankomags-projects.vercel.app/",
-        "https://urban-embeddings-explorer-kpvnbn384-jankomags-projects.vercel.app/",
+        "https://urban-embeddings-explorer.vercel.app",  # Remove trailing slash
+        "https://urban-embeddings-explorer-git-main-jankomags-projects.vercel.app",  # Remove trailing slash
+        "https://urban-embeddings-explorer-kpvnbn384-jankomags-projects.vercel.app",  # Remove trailing slash
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "https://localhost:3000"
