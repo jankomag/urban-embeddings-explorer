@@ -1,5 +1,5 @@
 data/*
-frontend/.env
+.env
 frontend/node_modules/*
 .DS_Store
 frontend/package-lock.json
