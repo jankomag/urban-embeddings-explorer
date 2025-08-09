@@ -12,7 +12,7 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
   const [boundsStats, setBoundsStats] = useState({ exact: 0, fallback: 0 });
 
   const API_BASE_URL = process.env.NODE_ENV === 'production' 
-    ? 'https://your-domain.com'
+    ? process.env.REACT_APP_API_URL || 'http://localhost:8000'
     : 'http://localhost:8000';
 
   // Initialize map

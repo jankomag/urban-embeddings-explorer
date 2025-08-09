@@ -21,9 +21,9 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLoc
   const transformRef = useRef({ k: 1, x: 0, y: 0 });
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
 
-  const API_BASE_URL = process.env.NODE_ENV === 'production' 
-    ? 'https://your-domain.com'
-    : 'http://localhost:8000';
+const API_BASE_URL = process.env.NODE_ENV === 'production' 
+  ? process.env.REACT_APP_API_URL || 'http://localhost:8000'
+  : 'http://localhost:8000';
 
   // Continent color mapping
   const continentColors = {
