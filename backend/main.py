@@ -25,7 +25,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Enhanced Satellite Embeddings Explorer - With Exact Bounds", version="3.1.0")
+app = FastAPI(title="Enhanced Satellite Embeddings Explorer - With Adaptive Mixed Aggregation", version="3.2.0")
 
 # Add CORS middleware
 app.add_middleware(
@@ -49,10 +49,11 @@ dataset_stats = None
 city_representatives_data = None
 qdrant_client = None
 
-# Qdrant collection names
+# Updated Qdrant collection names with adaptive mixed
 COLLECTIONS = {
     'regular': 'satellite_embeddings_simple',
-    'global_contrastive': 'satellite_embeddings_global_contrastive_simple'
+    'global_contrastive': 'satellite_embeddings_global_contrastive_simple',
+    'adaptive_mixed': 'satellite_embeddings_adaptive_mixed_simple'
 }
 
 # Simple in-memory cache
@@ -197,6 +198,10 @@ def load_lightweight_data():
                     enhanced = stats['enhanced_features']
                     if enhanced.get('exact_tile_bounds'):
                         logger.info(f"✅ Enhanced features: exact bounds coverage {enhanced.get('bounds_coverage_percentage', 0):.1f}%")
+                    if enhanced.get('adaptive_mixed_aggregation'):
+                        logger.info(f"🔄 Adaptive mixed aggregation available")
+                        if 'adaptive_coverage_percentage' in enhanced:
+                            logger.info(f"🔄 Adaptive coverage: {enhanced['adaptive_coverage_percentage']:.1f}%")
         else:
             logger.warning("⚠️ Dataset statistics not found")
             stats = None
@@ -333,7 +338,7 @@ async def startup_event():
     global locations_data, umap_data, dataset_stats, city_representatives_data, qdrant_client
     
     try:
-        logger.info("🚀 Starting Enhanced Satellite Embeddings Explorer - With Exact Bounds")
+        logger.info("🚀 Starting Enhanced Satellite Embeddings Explorer - With Adaptive Mixed Aggregation")
         
         # Setup Qdrant client
         qdrant_client = setup_qdrant_client()
@@ -342,8 +347,8 @@ async def startup_event():
         locations_data, city_representatives_data, umap_data, dataset_stats = load_lightweight_data()
         
         logger.info("✅ Enhanced application startup completed successfully")
-        logger.info(f"💾 Memory usage: Enhanced metadata with exact bounds")
-        logger.info(f"🎯 Ready to serve similarity queries via Qdrant")
+        logger.info(f"💾 Memory usage: Enhanced metadata with exact bounds and adaptive mixed aggregation")
+        logger.info(f"🎯 Ready to serve similarity queries via Qdrant with three aggregation methods")
         
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
@@ -361,6 +366,7 @@ async def root():
     # Get collection info
     collection_info = {}
     bounds_stats = {"exact": 0, "fallback": 0, "percentage": 0}
+    adaptive_stats = {"available": False, "coverage": 0}
     
     if qdrant_client:
         try:
@@ -380,9 +386,14 @@ async def root():
         bounds_stats["fallback"] = len(locations_data) - bounds_stats["exact"]
         bounds_stats["percentage"] = (bounds_stats["exact"] / len(locations_data)) * 100 if locations_data else 0
     
+    # Check adaptive mixed availability
+    if dataset_stats and dataset_stats.get('enhanced_features', {}).get('adaptive_mixed_aggregation'):
+        adaptive_stats["available"] = True
+        adaptive_stats["coverage"] = dataset_stats.get('enhanced_features', {}).get('adaptive_coverage_percentage', 0)
+    
     return {
-        "message": "Enhanced Satellite Embeddings Explorer - With Exact Bounds", 
-        "version": "3.1.0",
+        "message": "Enhanced Satellite Embeddings Explorer - With Adaptive Mixed Aggregation", 
+        "version": "3.2.0",
         "status": "running",
         "qdrant_status": qdrant_status,
         "similarity_methods": list(COLLECTIONS.keys()),
@@ -390,10 +401,170 @@ async def root():
         "locations_loaded": len(locations_data) if locations_data else 0,
         "cities_loaded": len(city_representatives_data.get('city_representatives', [])) if city_representatives_data else 0,
         "bounds_coverage": bounds_stats,
-        "architecture": "enhanced_qdrant_with_exact_bounds"
+        "adaptive_mixed": adaptive_stats,
+        "architecture": "enhanced_qdrant_with_exact_bounds_and_adaptive_mixed"
     }
 
+@app.get("/api/similarity/{location_id}", response_model=SimplifiedSimilarityResponse)
+async def find_similar_locations(
+    location_id: int, 
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+    limit: int = Query(6, ge=1, le=50, description="Number of results to return"),
+    method: str = Query("regular", description="Similarity method: regular, global_contrastive, adaptive_mixed")
+):
+    """Find most similar locations using Qdrant vector similarity with three aggregation methods."""
+    if not qdrant_client:
+        raise HTTPException(status_code=503, detail="Qdrant client not initialized")
+    
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Location data not loaded")
+    
+    # Validate method
+    if method not in COLLECTIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid method '{method}'. Available: {list(COLLECTIONS.keys())}"
+        )
+    
+    # Find target location
+    target_location = None
+    for location in locations_data:
+        if location['id'] == location_id:
+            target_location = location
+            break
+    
+    if target_location is None:
+        raise HTTPException(status_code=404, detail="Location not found in metadata")
+    
+    # Check cache
+    cache_key = f"similarity_{location_id}_{method}_{offset}_{limit}"
+    cached_result = similarity_cache.get(cache_key)
+    if cached_result:
+        logger.info(f"🎯 Cache hit for similarity query: {cache_key}")
+        return cached_result
+    
+    try:
+        collection_name = COLLECTIONS[method]
+        logger.info(f"🔍 Querying {collection_name} for location {location_id} using {method} aggregation")
+        
+        # Query Qdrant
+        similar_results, total_results = await query_qdrant_similarity(
+            target_location_id=location_id,
+            collection_name=collection_name,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Format response
+        similar_locations = []
+        for location_data, sim_score in similar_results:
+            if location_data['id'] == location_id:
+                continue
+                
+            similar_location = SimilarLocation(
+                id=location_data['id'],
+                city=location_data['city'],
+                country=location_data['country'],
+                continent=location_data['continent'],
+                longitude=location_data['longitude'],
+                latitude=location_data['latitude'],
+                date=location_data['date'],
+                similarity_score=sim_score
+            )
+            similar_locations.append(similar_location)
+        
+        # Create pagination info
+        has_more = (offset + len(similar_locations)) < total_results
+        next_offset = offset + limit if has_more else None
+        
+        pagination = PaginationInfo(
+            offset=offset,
+            limit=limit,
+            total_results=total_results,
+            has_more=has_more,
+            next_offset=next_offset,
+            returned_count=len(similar_locations)
+        )
+        
+        response = SimplifiedSimilarityResponse(
+            target_location_id=location_id,
+            similar_locations=similar_locations,
+            method_used=f"qdrant_{method}",
+            pagination=pagination
+        )
+        
+        # Cache the result
+        similarity_cache.set(cache_key, response)
+        
+        logger.info(f"✅ Similarity query completed using {method}: {len(similar_locations)} unique results")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"❌ Error in similarity search: {e}")
+        raise HTTPException(status_code=500, detail=f"Similarity search failed: {str(e)}")
 
+@app.get("/api/methods")
+async def get_similarity_methods():
+    """Get available similarity methods and descriptions with adaptive mixed."""
+    methods = {
+        "regular": {
+            "name": "Regular Embeddings",
+            "description": "Standard similarity using mean-aggregated patch embeddings",
+            "collection": COLLECTIONS["regular"],
+            "use_case": "General similarity based on overall visual appearance",
+            "aggregation_type": "uniform_mean"
+        },
+        "global_contrastive": {
+            "name": "Global Contrastive",
+            "description": "Dataset mean subtracted to highlight city-level differences",
+            "collection": COLLECTIONS["global_contrastive"],
+            "use_case": "Find cities that differ from the global average in similar ways",
+            "aggregation_type": "contrastive_mean"
+        },
+        "adaptive_mixed": {
+            "name": "Adaptive Mixed",
+            "description": "Intelligent switching between uniform and weighted aggregation based on patch diversity",
+            "collection": COLLECTIONS["adaptive_mixed"],
+            "use_case": "Optimal aggregation for both homogeneous and heterogeneous urban areas",
+            "aggregation_type": "adaptive_weighted",
+            "technical_details": {
+                "homogeneous_threshold": 0.2,
+                "aggregation_strategy": "Auto-selects between simple mean (homogeneous tiles) and distinctiveness-weighted mean (heterogeneous tiles)",
+                "benefits": "Better handling of diverse urban patterns while maintaining efficiency for uniform areas"
+            }
+        }
+    }
+    
+    # Add availability information
+    for method_key, method_info in methods.items():
+        if qdrant_client:
+            try:
+                collections = qdrant_client.get_collections()
+                collection_exists = any(c.name == method_info["collection"] for c in collections.collections)
+                method_info["available"] = collection_exists
+            except:
+                method_info["available"] = False
+        else:
+            method_info["available"] = False
+    
+    # Add adaptive mixed statistics if available
+    if dataset_stats and dataset_stats.get('enhanced_features', {}).get('adaptive_mixed_aggregation'):
+        adaptive_stats = dataset_stats.get('enhanced_features', {})
+        methods["adaptive_mixed"]["statistics"] = {
+            "coverage_percentage": adaptive_stats.get('adaptive_coverage_percentage', 0),
+            "homogeneous_tiles": adaptive_stats.get('homogeneous_tiles', 0),
+            "heterogeneous_tiles": adaptive_stats.get('heterogeneous_tiles', 0)
+        }
+    
+    return {
+        "available_methods": methods,
+        "default_method": "regular",
+        "total_methods": len(methods),
+        "adaptive_mixed_available": methods["adaptive_mixed"]["available"]
+    }
+
+# Include all other existing endpoints unchanged...
 @app.get("/api/locations", response_model=List[LocationData])
 async def get_enhanced_locations(
     zoom: Optional[float] = Query(None, description="Map zoom level for LOD switching"),
@@ -474,207 +645,6 @@ async def get_enhanced_locations(
         logger.info(f"📊 Enhanced tiles response: {len(enhanced_locations)} tiles, {bounds_stats['exact']} exact bounds, {bounds_stats['fallback']} fallback")
         return enhanced_locations
 
-
-@app.get("/api/locations/{location_id}")
-async def get_enhanced_location(location_id: int):
-    """Get detailed info for a specific location with bounds."""
-    if not locations_data:
-        raise HTTPException(status_code=503, detail="Location data not loaded")
-    
-    # Find location by ID
-    location_data = None
-    for loc in locations_data:
-        if loc['id'] == location_id:
-            location_data = loc
-            break
-    
-    if location_data is None:
-        raise HTTPException(status_code=404, detail="Location not found")
-    
-    response_data = {
-        **location_data,
-        "embedding_shape": (768,),
-        "has_full_patches": True,
-        "stored_in": "qdrant_vector_db",
-        "bounds_type": "exact" if location_data.get('has_exact_bounds', False) else "fallback"
-    }
-    
-    return response_data
-
-@app.get("/api/cities", response_model=CityRepresentativesResponse)
-async def get_city_representatives():
-    """Get city representatives for map clustering."""
-    if not city_representatives_data:
-        # Fallback: generate from locations
-        if not locations_data:
-            raise HTTPException(status_code=503, detail="Location data not loaded")
-        
-        logger.info("🏙️ Generating city representatives from enhanced location data...")
-        city_groups = {}
-        
-        for location in locations_data:
-            city_key = f"{location['city']}, {location['country']}"
-            if city_key not in city_groups:
-                city_groups[city_key] = []
-            city_groups[city_key].append(location)
-        
-        city_reps = []
-        for city_key, city_locations in city_groups.items():
-            city_locations.sort(key=lambda x: x['id'])
-            representative = city_locations[0]
-            
-            lons = [loc['longitude'] for loc in city_locations]
-            lats = [loc['latitude'] for loc in city_locations]
-            
-            city_rep = {
-                'city_key': city_key,
-                'city': representative['city'],
-                'country': representative['country'],
-                'continent': representative['continent'],
-                'representative_tile_id': representative['id'],
-                'representative_longitude': representative['longitude'],
-                'representative_latitude': representative['latitude'],
-                'centroid_longitude': sum(lons) / len(lons),
-                'centroid_latitude': sum(lats) / len(lats),
-                'tile_count': len(city_locations),
-                'all_tile_ids': [loc['id'] for loc in city_locations]
-            }
-            city_reps.append(city_rep)
-        
-        return CityRepresentativesResponse(
-            city_representatives=city_reps,
-            total_cities=len(city_reps),
-            total_tiles=len(locations_data),
-            source='generated_from_enhanced_locations'
-        )
-    
-    return CityRepresentativesResponse(**city_representatives_data)
-
-@app.get("/api/tile-bounds/{location_id}", response_model=TileBoundsResponse)
-async def get_tile_bounds(location_id: int):
-    """Get exact tile boundary coordinates for a location if available."""
-    if not locations_data:
-        raise HTTPException(status_code=503, detail="Location data not loaded")
-    
-    # Find location by ID
-    location_data = None
-    for loc in locations_data:
-        if loc['id'] == location_id:
-            location_data = loc
-            break
-    
-    if location_data is None:
-        raise HTTPException(status_code=404, detail="Location not found")
-    
-    return TileBoundsResponse(
-        location_id=location_id,
-        city=location_data['city'],
-        country=location_data['country'],
-        tile_bounds=location_data.get('tile_bounds'),
-        has_exact_bounds=location_data.get('has_exact_bounds', False),
-        tile_width_degrees=location_data.get('tile_width_degrees'),
-        tile_height_degrees=location_data.get('tile_height_degrees')
-    )
-
-@app.get("/api/similarity/{location_id}", response_model=SimplifiedSimilarityResponse)
-async def find_similar_locations(
-    location_id: int, 
-    offset: int = Query(0, ge=0, description="Number of results to skip"),
-    limit: int = Query(6, ge=1, le=50, description="Number of results to return"),
-    method: str = Query("regular", description="Similarity method: regular, global_contrastive")
-):
-    """Find most similar locations using Qdrant vector similarity."""
-    if not qdrant_client:
-        raise HTTPException(status_code=503, detail="Qdrant client not initialized")
-    
-    if not locations_data:
-        raise HTTPException(status_code=503, detail="Location data not loaded")
-    
-    # Validate method
-    if method not in COLLECTIONS:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid method '{method}'. Available: {list(COLLECTIONS.keys())}"
-        )
-    
-    # Find target location
-    target_location = None
-    for location in locations_data:
-        if location['id'] == location_id:
-            target_location = location
-            break
-    
-    if target_location is None:
-        raise HTTPException(status_code=404, detail="Location not found in metadata")
-    
-    # Check cache
-    cache_key = f"similarity_{location_id}_{method}_{offset}_{limit}"
-    cached_result = similarity_cache.get(cache_key)
-    if cached_result:
-        logger.info(f"🎯 Cache hit for similarity query: {cache_key}")
-        return cached_result
-    
-    try:
-        collection_name = COLLECTIONS[method]
-        logger.info(f"🔍 Querying {collection_name} for location {location_id}")
-        
-        # Query Qdrant
-        similar_results, total_results = await query_qdrant_similarity(
-            target_location_id=location_id,
-            collection_name=collection_name,
-            limit=limit,
-            offset=offset
-        )
-        
-        # Format response
-        similar_locations = []
-        for location_data, sim_score in similar_results:
-            if location_data['id'] == location_id:
-                continue
-                
-            similar_location = SimilarLocation(
-                id=location_data['id'],
-                city=location_data['city'],
-                country=location_data['country'],
-                continent=location_data['continent'],
-                longitude=location_data['longitude'],
-                latitude=location_data['latitude'],
-                date=location_data['date'],
-                similarity_score=sim_score
-            )
-            similar_locations.append(similar_location)
-        
-        # Create pagination info
-        has_more = (offset + len(similar_locations)) < total_results
-        next_offset = offset + limit if has_more else None
-        
-        pagination = PaginationInfo(
-            offset=offset,
-            limit=limit,
-            total_results=total_results,
-            has_more=has_more,
-            next_offset=next_offset,
-            returned_count=len(similar_locations)
-        )
-        
-        response = SimplifiedSimilarityResponse(
-            target_location_id=location_id,
-            similar_locations=similar_locations,
-            method_used=f"qdrant_{method}",
-            pagination=pagination
-        )
-        
-        # Cache the result
-        similarity_cache.set(cache_key, response)
-        
-        logger.info(f"✅ Similarity query completed: {len(similar_locations)} unique results")
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"❌ Error in similarity search: {e}")
-        raise HTTPException(status_code=500, detail=f"Similarity search failed: {str(e)}")
-
 @app.get("/api/umap", response_model=UMapResponse)
 async def get_enhanced_umap_embeddings():
     """Get enhanced UMAP 2D coordinates with tile bounds information."""
@@ -726,7 +696,7 @@ async def get_enhanced_umap_embeddings():
 
 @app.get("/api/stats", response_model=SimplifiedStatsResponse)
 async def get_enhanced_stats():
-    """Get enhanced dataset statistics including bounds coverage."""
+    """Get enhanced dataset statistics including bounds coverage and adaptive mixed info."""
     if not locations_data:
         raise HTTPException(status_code=503, detail="Location data not loaded")
     
@@ -748,7 +718,7 @@ async def get_enhanced_stats():
             locations_with_full_patches=dataset_stats['total_samples'],
             countries=sorted(countries),
             continents=sorted(continents),
-            similarity_method="qdrant_vector_search",
+            similarity_method="qdrant_vector_search_with_adaptive_mixed",
             # Enhanced: Add bounds coverage
             bounds_coverage_percentage=exact_bounds_percentage,
             tiles_with_exact_bounds=exact_bounds_count,
@@ -768,7 +738,7 @@ async def get_enhanced_stats():
             locations_with_full_patches=len(locations_data),
             countries=sorted(countries),
             continents=sorted(continents),
-            similarity_method="qdrant_vector_search",
+            similarity_method="qdrant_vector_search_with_adaptive_mixed",
             # Enhanced: Add bounds coverage
             bounds_coverage_percentage=exact_bounds_percentage,
             tiles_with_exact_bounds=exact_bounds_count,
@@ -788,7 +758,7 @@ async def get_config():
 
 @app.get("/api/health")
 async def enhanced_health_check():
-    """Enhanced health check with bounds coverage."""
+    """Enhanced health check with bounds coverage and adaptive mixed info."""
     health_status = {
         "status": "healthy",
         "timestamp": time.time(),
@@ -817,19 +787,26 @@ async def enhanced_health_check():
     except Exception as e:
         health_status["components"]["qdrant"] = {"status": "error", "error": str(e)}
     
-    # Enhanced data check with bounds
+    # Enhanced data check with bounds and adaptive mixed
     bounds_stats = {"exact": 0, "fallback": 0, "percentage": 0}
+    adaptive_stats = {"available": False, "coverage": 0}
+    
     if locations_data:
         bounds_stats["exact"] = sum(1 for loc in locations_data if loc.get('has_exact_bounds', False))
         bounds_stats["fallback"] = len(locations_data) - bounds_stats["exact"]
         bounds_stats["percentage"] = (bounds_stats["exact"] / len(locations_data)) * 100
+    
+    if dataset_stats and dataset_stats.get('enhanced_features', {}).get('adaptive_mixed_aggregation'):
+        adaptive_stats["available"] = True
+        adaptive_stats["coverage"] = dataset_stats.get('enhanced_features', {}).get('adaptive_coverage_percentage', 0)
     
     health_status["components"]["data"] = {
         "locations_loaded": len(locations_data) if locations_data else 0,
         "cities_loaded": len(city_representatives_data.get('city_representatives', [])) if city_representatives_data else 0,
         "umap_available": umap_data is not None,
         "stats_available": dataset_stats is not None,
-        "bounds_coverage": bounds_stats
+        "bounds_coverage": bounds_stats,
+        "adaptive_mixed": adaptive_stats
     }
     
     # Cache status
@@ -846,30 +823,6 @@ async def clear_cache():
     similarity_cache.clear()
     logger.info("🧹 Similarity cache cleared")
     return {"message": "Cache cleared", "status": "success"}
-
-@app.get("/api/methods")
-async def get_similarity_methods():
-    """Get available similarity methods and descriptions."""
-    methods = {
-        "regular": {
-            "name": "Regular Embeddings",
-            "description": "Standard similarity using mean-aggregated patch embeddings",
-            "collection": COLLECTIONS["regular"],
-            "use_case": "General similarity based on overall visual appearance"
-        },
-        "global_contrastive": {
-            "name": "Global Contrastive",
-            "description": "Dataset mean subtracted to highlight city-level differences",
-            "collection": COLLECTIONS["global_contrastive"],
-            "use_case": "Find cities that differ from the global average in similar ways"
-        }
-    }
-    
-    return {
-        "available_methods": methods,
-        "default_method": "regular",
-        "total_methods": len(methods)
-    }
 
 if __name__ == "__main__":
     import uvicorn

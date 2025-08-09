@@ -50,15 +50,41 @@ function HelpPanel({ isOpen, onClose }) {
               differ from typical urban areas. Best for finding cities with similar unique features.
             </p>
           </div>
+
+          <div className="method-explanation">
+            <h4>🔄 Adaptive Mixed</h4>
+            <p>
+              <strong>Intelligent aggregation</strong> that automatically chooses between uniform and weighted averaging 
+              based on patch diversity within each tile. For homogeneous areas (parks, uniform residential), uses simple 
+              mean aggregation. For heterogeneous areas (mixed commercial/residential, complex urban patterns), uses 
+              distinctiveness-weighted aggregation that emphasizes unique patches.
+            </p>
+            <div className="technical-note">
+              <strong>How it works:</strong> Calculates patch homogeneity using coefficient of variation and pairwise 
+              cosine similarity. If homogeneity &lt; 0.2 threshold → simple mean. If diverse → weights patches by their 
+              distinctiveness from the tile mean, using adaptive temperature scaling. Best for optimal similarity 
+              matching across diverse urban environments.
+            </div>
+          </div>
+        </div>
+
+        <div className="help-section">
+          <h3>When to Use Each Method</h3>
+          <ul>
+            <li><strong>Regular:</strong> General exploration, finding areas with similar overall visual characteristics</li>
+            <li><strong>Global Contrastive:</strong> Finding cities that stand out from typical urban patterns in similar ways</li>
+            <li><strong>Adaptive Mixed:</strong> Most versatile - automatically optimizes for both uniform and complex urban areas</li>
+          </ul>
         </div>
 
         <div className="help-section">
           <h3>Technical Details</h3>
           <p className="technical-note">
             <strong>Patch Aggregation:</strong> The TerraMind model processes each 224×224m tile as 14×14 patches. 
-            Each patch generates a 768-dimensional embedding vector. To enable efficient similarity search, these 
-            196 patch vectors are mean-pooled into a single 768-dimensional representation per tile, preserving 
-            the overall visual characteristics while enabling fast vector similarity computations.
+            Each patch generates a 768-dimensional embedding vector. The three aggregation methods differ in how 
+            these 196 patch vectors are combined: Regular uses simple mean pooling, Global Contrastive subtracts 
+            the dataset mean, and Adaptive Mixed intelligently weights patches based on local diversity patterns 
+            to preserve both global structure and local details.
           </p>
         </div>
 
@@ -101,10 +127,16 @@ export function WelcomePanel() {
             <h4>Filter by City</h4>
             <p>Use the top bar to focus on specific countries or cities</p>
           </div>
+
+          <div className="action-card">
+            <div className="action-icon">🔄</div>
+            <h4>Try Adaptive Mixed</h4>
+            <p>New intelligent aggregation method that optimizes for diverse urban patterns</p>
+          </div>
         </div>
 
         <div className="welcome-tip">
-          <strong>💡 Tip:</strong> Press <kbd>?</kbd> anytime to learn more about the similarity methods and technical details
+          <strong>💡 Tip:</strong> Press <kbd>?</kbd> anytime to learn more about the three similarity methods and their technical details
         </div>
       </div>
     </div>

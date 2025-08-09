@@ -139,7 +139,7 @@ function AutocompleteInput({
   );
 }
 
-// Enhanced Similarity Panel Component with Same-City Toggle
+// Enhanced Similarity Panel Component with Adaptive Mixed Aggregation
 function EnhancedSimilarityPanel({ 
   selectedLocation, 
   primarySelectionId, 
@@ -154,8 +154,8 @@ function EnhancedSimilarityPanel({
   const [paginationInfo, setPaginationInfo] = useState(null);
   const [loadingMoreResults, setLoadingMoreResults] = useState(false);
   const [similarityMethod, setSimilarityMethod] = useState('regular');
-  const [includeSameCity, setIncludeSameCity] = useState(true); // Toggle state for same city
-  const [allSimilarResults, setAllSimilarResults] = useState([]); // Store all results
+  const [includeSameCity, setIncludeSameCity] = useState(true);
+  const [allSimilarResults, setAllSimilarResults] = useState([]);
   const [availableMethods, setAvailableMethods] = useState({
     'regular': { 
       name: "Regular Embeddings", 
@@ -164,6 +164,10 @@ function EnhancedSimilarityPanel({
     'global_contrastive': { 
       name: "Global Contrastive", 
       description: "Dataset mean subtracted to highlight city-level differences" 
+    },
+    'adaptive_mixed': {
+      name: "Adaptive Mixed",
+      description: "Intelligent switching between uniform and weighted aggregation based on patch diversity"
     }
   });
   const [loadingMethods, setLoadingMethods] = useState(false);
@@ -183,7 +187,7 @@ function EnhancedSimilarityPanel({
         const data = await response.json();
         
         const filteredMethods = {};
-        const availableKeys = ['regular', 'global_contrastive'];
+        const availableKeys = ['regular', 'global_contrastive', 'adaptive_mixed'];
         
         for (const key of availableKeys) {
           if (data.available_methods[key]) {
@@ -500,6 +504,11 @@ function EnhancedSimilarityPanel({
               {similarityMethod === 'global_contrastive' && (
                 <div style={{ fontSize: '7px', color: '#6b7280', marginTop: '2px' }}>
                   Best for: Finding unique city characteristics
+                </div>
+              )}
+              {similarityMethod === 'adaptive_mixed' && (
+                <div style={{ fontSize: '7px', color: '#6b7280', marginTop: '2px' }}>
+                  Best for: Optimal aggregation for diverse urban patterns
                 </div>
               )}
             </div>
