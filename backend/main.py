@@ -20,13 +20,6 @@ app = FastAPI()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Add rate limiting to expensive endpoints
-@app.get("/api/similarity/{location_id}")
-@limiter.limit("10/minute")  # Max 10 requests per minute per IP
-async def find_similar_locations(request: Request, location_id: int):
-    # Your existing code
-    pass
-
 @app.get("/api/locations")
 @limiter.limit("30/minute")  # Max 30 requests per minute per IP
 async def get_locations(request: Request):
@@ -545,8 +538,10 @@ async def root():
         "architecture": "enhanced_qdrant_with_exact_bounds_and_adaptive_mixed"
     }
 
+@limiter.limit("10/minute")  # Max 10 requests per minute per IP
 @app.get("/api/similarity/{location_id}", response_model=SimplifiedSimilarityResponse)
 async def find_similar_locations(
+    request: Request,  # Add this parameter
     location_id: int, 
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     limit: int = Query(6, ge=1, le=50, description="Number of results to return"),
