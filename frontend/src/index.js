@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './ModernApp.css';
 import MapView from './MapView';
 import HighPerformanceUMapView from './HighPerformanceUMapView';
+import HelpPanel, { WelcomePanel } from './HelpPanel';
 import polyline from '@mapbox/polyline';
 
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
@@ -26,7 +27,6 @@ function AutocompleteInput({
   const inputRef = useRef(null);
   const dropdownRef = useRef(null);
 
-  // Filter options based on input value
   useEffect(() => {
     if (!value || value.length < 1) {
       setFilteredOptions([]);
@@ -36,19 +36,17 @@ function AutocompleteInput({
 
     const filtered = options.filter(option =>
       option.toLowerCase().includes(value.toLowerCase())
-    ).slice(0, 20); // Limit to 20 results for performance
+    ).slice(0, 20);
 
     setFilteredOptions(filtered);
     setIsOpen(filtered.length > 0);
     setHighlightedIndex(-1);
   }, [value, options]);
 
-  // Handle input change
   const handleInputChange = (e) => {
     onChange(e.target.value);
   };
 
-  // Handle option selection
   const handleOptionSelect = (option) => {
     onSelect(option);
     setIsOpen(false);
@@ -56,7 +54,6 @@ function AutocompleteInput({
     inputRef.current?.blur();
   };
 
-  // Handle keyboard navigation
   const handleKeyDown = (e) => {
     if (!isOpen) return;
 
@@ -87,7 +84,6 @@ function AutocompleteInput({
     }
   };
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -143,7 +139,7 @@ function AutocompleteInput({
   );
 }
 
-// Enhanced Similarity Panel Component with Method Selection
+// Enhanced Similarity Panel Component with Same-City Toggle
 function EnhancedSimilarityPanel({ 
   selectedLocation, 
   primarySelectionId, 
@@ -158,7 +154,8 @@ function EnhancedSimilarityPanel({
   const [paginationInfo, setPaginationInfo] = useState(null);
   const [loadingMoreResults, setLoadingMoreResults] = useState(false);
   const [similarityMethod, setSimilarityMethod] = useState('regular');
-  // Updated to only include the two methods that exist in Qdrant
+  const [includeSameCity, setIncludeSameCity] = useState(true); // Toggle state for same city
+  const [allSimilarResults, setAllSimilarResults] = useState([]); // Store all results
   const [availableMethods, setAvailableMethods] = useState({
     'regular': { 
       name: "Regular Embeddings", 
@@ -171,11 +168,9 @@ function EnhancedSimilarityPanel({
   });
   const [loadingMethods, setLoadingMethods] = useState(false);
   
-  // Request cancellation
   const currentRequestRef = useRef(null);
   const loadMoreRequestRef = useRef(null);
 
-  // Load available similarity methods on component mount - now simplified
   useEffect(() => {
     loadAvailableMethods();
   }, []);
@@ -187,7 +182,6 @@ function EnhancedSimilarityPanel({
       if (response.ok) {
         const data = await response.json();
         
-        // Filter to only include the methods we actually have in Qdrant
         const filteredMethods = {};
         const availableKeys = ['regular', 'global_contrastive'];
         
@@ -197,54 +191,54 @@ function EnhancedSimilarityPanel({
           }
         }
         
-        // Only update if we got valid methods, otherwise keep defaults
         if (Object.keys(filteredMethods).length > 0) {
           setAvailableMethods(filteredMethods);
-          console.log('📊 Loaded similarity methods:', Object.keys(filteredMethods));
-        } else {
-          console.log('📊 Using default similarity methods (API returned no valid methods)');
         }
-      } else {
-        console.warn('⚠️ Failed to load methods from API, using defaults');
       }
     } catch (error) {
       console.error('Error loading similarity methods:', error);
-      console.log('📊 Using default similarity methods due to error');
-      // Keep the default methods set in state initialization
     } finally {
       setLoadingMethods(false);
     }
   };
 
-  // Find similar locations with method parameter
-  const findSimilarLocations = async (locationId, offset = 0, limit = 6, method = similarityMethod) => {
-    console.log('Finding similar locations for:', locationId, 'method:', method, 'offset:', offset);
+  // Filter results based on same-city toggle
+  const filterResultsBySameCity = useCallback((results) => {
+    if (!selectedLocation) return results;
     
-    // Validate method against available methods
+    if (includeSameCity) {
+      return results; // Return all results
+    } else {
+      // Filter out results from the same city
+      return results.filter(location => 
+        location.city !== selectedLocation.city || 
+        location.country !== selectedLocation.country
+      );
+    }
+  }, [includeSameCity, selectedLocation]);
+
+  const findSimilarLocations = async (locationId, offset = 0, limit = 12, method = similarityMethod) => {
     if (!availableMethods[method]) {
       return;
     }
     
-    // Cancel any existing request for initial loads (not for pagination)
     if (offset === 0 && currentRequestRef.current) {
       currentRequestRef.current.abort();
       currentRequestRef.current = null;
     }
     
-    // Cancel any existing load more request for pagination
     if (offset > 0 && loadMoreRequestRef.current) {
-      console.log('🚫 Cancelling previous load more request');
       loadMoreRequestRef.current.abort();
       loadMoreRequestRef.current = null;
     }
     
-    // Create new AbortController for this request
     const abortController = new AbortController();
     
     if (offset === 0) {
       currentRequestRef.current = abortController;
       setFindingSimilar(true);
-      setSimilarResults([]); // Clear previous results for new search
+      setSimilarResults([]);
+      setAllSimilarResults([]);
       setPaginationInfo(null);
     } else {
       loadMoreRequestRef.current = abortController;
@@ -252,8 +246,11 @@ function EnhancedSimilarityPanel({
     }
 
     try {
+      // Request more results to account for filtering
+      const adjustedLimit = includeSameCity ? limit : limit * 2;
+      
       const response = await fetch(
-        `${API_BASE_URL}/api/similarity/${locationId}?offset=${offset}&limit=${limit}&method=${method}`,
+        `${API_BASE_URL}/api/similarity/${locationId}?offset=${offset}&limit=${adjustedLimit}&method=${method}`,
         { signal: abortController.signal }
       );
       
@@ -263,39 +260,36 @@ function EnhancedSimilarityPanel({
       }
       
       const data = await response.json();
-      console.log('✅ Found similar locations:', data.similar_locations.length, 'method:', data.method_used, 'offset:', offset);
       
-      // Only process results if this request wasn't cancelled
       if (!abortController.signal.aborted) {
         if (offset === 0) {
-          // Initial load - replace results
-          setSimilarResults(data.similar_locations);
+          setAllSimilarResults(data.similar_locations);
+          const filtered = filterResultsBySameCity(data.similar_locations);
+          setSimilarResults(filtered.slice(0, 6));
         } else {
-          // Load more - append results
-          setSimilarResults(prev => [...prev, ...data.similar_locations]);
+          setAllSimilarResults(prev => [...prev, ...data.similar_locations]);
+          const allResults = [...allSimilarResults, ...data.similar_locations];
+          const filtered = filterResultsBySameCity(allResults);
+          setSimilarResults(filtered.slice(0, similarResults.length + 6));
         }
         
         setPaginationInfo(data.pagination);
       }
     } catch (error) {
-      // Don't show error for cancelled requests
       if (error.name === 'AbortError') {
-        console.log('🔄 Request was cancelled');
         return;
       }
       
       console.error('Error finding similar locations:', error);
       
-      // Only update state if request wasn't cancelled
       if (!abortController.signal.aborted) {
-        // Show error state but don't clear existing results if loading more
         if (offset === 0) {
           setSimilarResults([]);
+          setAllSimilarResults([]);
           setPaginationInfo(null);
         }
       }
     } finally {
-      // Only update loading state if request wasn't cancelled
       if (!abortController.signal.aborted) {
         if (offset === 0) {
           setFindingSimilar(false);
@@ -308,28 +302,20 @@ function EnhancedSimilarityPanel({
     }
   };
 
-  // Load more similar locations with current method
   const loadMoreSimilarLocations = () => {
     if (paginationInfo && paginationInfo.has_more && primarySelectionId && !loadingMoreResults) {
       findSimilarLocations(primarySelectionId, paginationInfo.next_offset, 6, similarityMethod);
     }
   };
 
-  // Handle similarity method change
   const handleMethodChange = (newMethod) => {
-    console.log('🔄 Similarity method changed to:', newMethod);
-    
-    // Validate method
     if (!availableMethods[newMethod]) {
-      console.error(`❌ Method '${newMethod}' not available`);
       return;
     }
     
     setSimilarityMethod(newMethod);
     
-    // If we have a primary selection, re-run the search with new method
     if (primarySelectionId) {
-      // Cancel any existing requests
       if (currentRequestRef.current) {
         currentRequestRef.current.abort();
         currentRequestRef.current = null;
@@ -339,16 +325,33 @@ function EnhancedSimilarityPanel({
         loadMoreRequestRef.current = null;
       }
       
-      // Reset states and search with new method
       setFindingSimilar(false);
       setLoadingMoreResults(false);
       setSimilarResults([]);
+      setAllSimilarResults([]);
       setPaginationInfo(null);
       
-      // Start new search
       findSimilarLocations(primarySelectionId, 0, 6, newMethod);
     }
   };
+
+  // Handle same-city toggle change
+  const handleSameCityToggle = () => {
+    const newIncludeSameCity = !includeSameCity;
+    setIncludeSameCity(newIncludeSameCity);
+    
+    // Re-filter existing results
+    const filtered = filterResultsBySameCity(allSimilarResults);
+    setSimilarResults(filtered.slice(0, similarResults.length || 6));
+  };
+
+  // Re-filter when toggle changes
+  useEffect(() => {
+    if (allSimilarResults.length > 0) {
+      const filtered = filterResultsBySameCity(allSimilarResults);
+      setSimilarResults(filtered.slice(0, similarResults.length || 6));
+    }
+  }, [includeSameCity, allSimilarResults, filterResultsBySameCity]);
 
   const getStaticMapImage = (longitude, latitude, width = 140, height = 140, zoom = 11.3) => {
     if (!mapboxToken || !longitude || !latitude) {
@@ -364,72 +367,43 @@ function EnhancedSimilarityPanel({
     }
   };
 
-  // Effect to find similar locations when primary selection changes
   useEffect(() => {
     if (primarySelectionId) {
-      console.log('🎯 Primary selection changed to:', primarySelectionId);
-      
-      // Cancel any existing requests when primary selection changes
       if (currentRequestRef.current) {
-        console.log('🚫 Cancelling existing request due to selection change');
         currentRequestRef.current.abort();
         currentRequestRef.current = null;
       }
       
       if (loadMoreRequestRef.current) {
-        console.log('🚫 Cancelling existing load more request due to selection change');
         loadMoreRequestRef.current.abort();
         loadMoreRequestRef.current = null;
       }
       
-      // Reset states
       setFindingSimilar(false);
       setLoadingMoreResults(false);
       
       findSimilarLocations(primarySelectionId, 0, 6, similarityMethod);
     }
-  }, [primarySelectionId, similarityMethod]); // Include similarityMethod in dependencies
+  }, [primarySelectionId, similarityMethod]);
   
-  // Cleanup effect to cancel requests on unmount
   useEffect(() => {
     return () => {
       if (currentRequestRef.current) {
-        console.log('🧹 Cleaning up similarity request on unmount');
         currentRequestRef.current.abort();
       }
       if (loadMoreRequestRef.current) {
-        console.log('🧹 Cleaning up load more request on unmount');
         loadMoreRequestRef.current.abort();
       }
     };
   }, []);
 
-  if (!selectedLocation && !primarySelectionId) {
-    return (
-      <div className="empty-state">
-        <p>Click any location to explore similarities</p>
-        <div className="empty-info">
-          <h5>AI-Powered Similarity Analysis</h5>
-          <p>Using TerraMind satellite embeddings with two similarity methods to find visually similar urban areas.</p>
-          <div style={{ marginTop: '8px', fontSize: '9px', color: '#666' }}>
-            <strong>Available Methods:</strong><br/>
-            • Regular: Standard visual similarity<br/>
-            • Global Contrastive: City-level differences
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <>
-      {/* Selected Location Card */}
       {selectedLocation && (
         <div className="selected-card">
           <button 
             className="zoom-to-location-btn"
             onClick={() => {
-              // Zoom map to this location
               window.dispatchEvent(new CustomEvent('zoomToLocation', {
                 detail: { 
                   longitude: selectedLocation.longitude, 
@@ -437,14 +411,13 @@ function EnhancedSimilarityPanel({
                   id: selectedLocation.id 
                 }
               }));
-              // Zoom UMAP to this point
               window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
                 detail: { locationId: selectedLocation.id }
               }));
             }}
             title="Zoom to this location on map and UMAP"
           >
-            🎯Back
+            🎯 Back
           </button>
           <h4>{selectedLocation.city}, {selectedLocation.country}</h4>
           {mapboxToken && selectedLocation && (
@@ -464,7 +437,6 @@ function EnhancedSimilarityPanel({
         </div>
       )}
 
-      {/* Similar Results - only show if we have a primary selection */}
       {primarySelectionId && (
         <div className="similar-section">
           <div className="similar-header">
@@ -473,12 +445,11 @@ function EnhancedSimilarityPanel({
             </h4>
             {paginationInfo && (
               <div className="similar-count">
-                {similarResults.length} of {paginationInfo.total_results}
+                {similarResults.length} shown
               </div>
             )}
           </div>
           
-          {/* Similarity Method Selector - Updated with better descriptions */}
           <div className="method-selector">
             <label className="method-label">Similarity Method:</label>
             <select 
@@ -495,7 +466,24 @@ function EnhancedSimilarityPanel({
             </select>
           </div>
           
-          {/* Method Description - Enhanced with more detailed info */}
+          {/* Same City Toggle */}
+          <div className="city-filter-toggle">
+            <label className="toggle-label">
+              🏙️ Include same city
+            </label>
+            <div 
+              className={`toggle-switch ${includeSameCity ? 'active' : ''}`}
+              onClick={handleSameCityToggle}
+            >
+              <div className="toggle-slider"></div>
+            </div>
+          </div>
+          {!includeSameCity && (
+            <div className="toggle-info">
+              Showing results from other cities only
+            </div>
+          )}
+          
           {availableMethods[similarityMethod] && (
             <div className="method-info-enhanced">
               <div className="method-badge-enhanced">
@@ -517,7 +505,6 @@ function EnhancedSimilarityPanel({
             </div>
           )}
           
-          {/* Scrollable Similarity Content */}
           <div className="similarity-content">
             {findingSimilar ? (
               <div className="loading-state">
@@ -532,13 +519,16 @@ function EnhancedSimilarityPanel({
                   {similarResults.map((location, index) => {
                     const similarity = (location.similarity_score * 100).toFixed(1);
                     const imageUrl = getStaticMapImage(location.longitude, location.latitude, 140, 140, 11.3);
+                    const isSameCity = selectedLocation && 
+                      location.city === selectedLocation.city && 
+                      location.country === selectedLocation.country;
                     
                     return (
                       <div 
                         key={`${location.id}-${index}`}
-                        className="similarity-tile"
+                        className={`similarity-tile ${isSameCity ? 'same-city' : ''}`}
                         onClick={() => onNavigationClick(location)}
-                        title={`${location.city}, ${location.country} - ${similarity}% similar using ${availableMethods[similarityMethod]?.name || similarityMethod}`}
+                        title={`${location.city}, ${location.country} - ${similarity}% similar ${isSameCity ? '(same city)' : ''}`}
                       >
                         {mapboxToken && imageUrl ? (
                           <img
@@ -569,7 +559,6 @@ function EnhancedSimilarityPanel({
                   })}
                 </div>
                 
-                {/* Load More Button */}
                 {paginationInfo && paginationInfo.has_more && (
                   <button 
                     className="show-more"
@@ -582,15 +571,15 @@ function EnhancedSimilarityPanel({
                         Loading more...
                       </>
                     ) : (
-                      <>Show {Math.min(6, paginationInfo.total_results - similarResults.length)} more</>
+                      <>Show more</>
                     )}
                   </button>
                 )}
                 
-                {/* Results Summary */}
                 {paginationInfo && !paginationInfo.has_more && similarResults.length > 6 && (
                   <div className="results-summary">
-                    Showing all {similarResults.length} results using {availableMethods[similarityMethod]?.name || similarityMethod}
+                    Showing {similarResults.length} results
+                    {!includeSameCity && " (excluding same city)"}
                   </div>
                 )}
               </>
@@ -615,15 +604,17 @@ function ModernApp() {
   const [error, setError] = useState(null);
   const [mapboxToken, setMapboxToken] = useState('');
   const [stats, setStats] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [hasFirstSelection, setHasFirstSelection] = useState(false);
   
-  // Enhanced City/Country selection state with autocomplete
+  // City/Country selection state
   const [cityFilteredLocations, setCityFilteredLocations] = useState(new Set());
   const [selectedCountry, setSelectedCountry] = useState('');
   const [selectedCity, setSelectedCity] = useState('');
   const [countryInput, setCountryInput] = useState('');
   const [cityInput, setCityInput] = useState('');
   const [allCountries, setAllCountries] = useState([]);
-  const [availableCities, setAvailableCities] = useState([]); // Cities filtered by selected country
+  const [availableCities, setAvailableCities] = useState([]);
 
   // Initialize app
   useEffect(() => {
@@ -646,6 +637,18 @@ function ModernApp() {
     };
 
     initializeApp();
+  }, []);
+
+  // Add keyboard shortcut for help
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
+        setShowHelp(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
   }, []);
 
   const loadConfig = async () => {
@@ -674,14 +677,7 @@ function ModernApp() {
       const locationData = await response.json();
       setLocations(locationData);
       
-      // Extract unique countries and cities for autocomplete
       const uniqueCountries = [...new Set(locationData.map(loc => loc.country))].sort();
-      const allCitiesWithCountry = locationData.map(loc => ({
-        city: loc.city,
-        country: loc.country,
-        cityCountry: `${loc.city}, ${loc.country}`
-      }));
-      
       setAllCountries(uniqueCountries);
       
       console.log(`Loaded ${locationData.length} locations`);
@@ -695,28 +691,179 @@ function ModernApp() {
   // Update available cities when country selection changes
   useEffect(() => {
     if (selectedCountry) {
-      // Filter cities by selected country
       const citiesInCountry = locations
         .filter(loc => loc.country === selectedCountry)
         .map(loc => loc.city);
       const uniqueCitiesInCountry = [...new Set(citiesInCountry)].sort();
       setAvailableCities(uniqueCitiesInCountry);
     } else {
-      // Show all cities when no country is selected
       const allCities = [...new Set(locations.map(loc => `${loc.city}, ${loc.country}`))].sort();
       setAvailableCities(allCities);
     }
   }, [selectedCountry, locations]);
 
-  // Trigger UMAP highlighting immediately when city/country filter changes
+  // Trigger UMAP highlighting when city/country filter changes
   useEffect(() => {
     if (cityFilteredLocations.size > 0) {
-      // Immediately center UMAP on filtered locations without waiting for hover
       window.dispatchEvent(new CustomEvent('centerOnCityTiles', {
         detail: { locationIds: Array.from(cityFilteredLocations) }
       }));
     }
   }, [cityFilteredLocations]);
+
+  const clearSelection = () => {
+    setSelectedLocations(new Set());
+    setCurrentSelectedLocation(null);
+    setPrimarySelectionId(null);
+    setSimilarResults([]);
+    setHasFirstSelection(false);
+  };
+
+  const clearCitySelection = () => {
+    setCityFilteredLocations(new Set());
+    setSelectedCity('');
+    setSelectedCountry('');
+    setCityInput('');
+    setCountryInput('');
+  };
+
+  const handleCountrySelect = (country) => {
+    setSelectedCountry(country);
+    setCountryInput(country);
+    setSelectedCity('');
+    setCityInput('');
+    
+    const countryLocations = locations.filter(loc => loc.country === country);
+    const countryLocationIds = new Set(countryLocations.map(loc => loc.id));
+    
+    setCityFilteredLocations(countryLocationIds);
+    
+    if (countryLocations.length > 0) {
+      const lons = countryLocations.map(loc => loc.longitude);
+      const lats = countryLocations.map(loc => loc.latitude);
+      
+      const bbox = {
+        minLon: Math.min(...lons),
+        maxLon: Math.max(...lons),
+        minLat: Math.min(...lats),
+        maxLat: Math.max(...lats)
+      };
+      
+      const lonPadding = (bbox.maxLon - bbox.minLon) * 0.1 || 0.01;
+      const latPadding = (bbox.maxLat - bbox.minLat) * 0.1 || 0.01;
+      
+      window.dispatchEvent(new CustomEvent('zoomToBbox', {
+        detail: { 
+          bbox: {
+            minLon: bbox.minLon - lonPadding,
+            maxLon: bbox.maxLon + lonPadding,
+            minLat: bbox.minLat - latPadding,
+            maxLat: bbox.maxLat + latPadding
+          }
+        }
+      }));
+    }
+  };
+
+  const handleCitySelect = (citySelection) => {
+    let city, country;
+    
+    if (selectedCountry && !citySelection.includes(',')) {
+      city = citySelection;
+      country = selectedCountry;
+    } else {
+      const parts = citySelection.split(', ');
+      if (parts.length >= 2) {
+        city = parts[0];
+        country = parts.slice(1).join(', ');
+      } else {
+        console.warn('Invalid city selection format:', citySelection);
+        return;
+      }
+    }
+    
+    setSelectedCity(city);
+    setCityInput(citySelection);
+    
+    if (!selectedCountry) {
+      setSelectedCountry(country);
+      setCountryInput(country);
+    }
+    
+    const cityLocations = locations.filter(loc => 
+      loc.city === city && loc.country === country
+    );
+    const cityLocationIds = new Set(cityLocations.map(loc => loc.id));
+    
+    setCityFilteredLocations(cityLocationIds);
+    
+    if (cityLocations.length > 0) {
+      const lons = cityLocations.map(loc => loc.longitude);
+      const lats = cityLocations.map(loc => loc.latitude);
+      
+      const bbox = {
+        minLon: Math.min(...lons),
+        maxLon: Math.max(...lons),
+        minLat: Math.min(...lats),
+        maxLat: Math.max(...lats)
+      };
+      
+      const lonPadding = (bbox.maxLon - bbox.minLon) * 0.1 || 0.01;
+      const latPadding = (bbox.maxLat - bbox.minLat) * 0.1 || 0.01;
+      
+      window.dispatchEvent(new CustomEvent('zoomToBbox', {
+        detail: { 
+          bbox: {
+            minLon: bbox.minLon - lonPadding,
+            maxLon: bbox.maxLon + lonPadding,
+            minLat: bbox.minLat - latPadding,
+            maxLat: bbox.maxLat + latPadding
+          }
+        }
+      }));
+    }
+  };
+
+  const handlePrimarySelection = (locationId) => {
+    console.log('Primary selection:', locationId);
+    
+    // Mark that user has made their first selection
+    setHasFirstSelection(true);
+    
+    // Clear city/country selection when user selects individual tile
+    clearCitySelection();
+    
+    const newSelected = new Set();
+    let newCurrentLocation = null;
+
+    newSelected.add(locationId);
+    newCurrentLocation = locations.find(loc => loc.id === locationId);
+    
+    setSelectedLocations(newSelected);
+    setCurrentSelectedLocation(newCurrentLocation);
+    setPrimarySelectionId(locationId);
+    
+    if (newCurrentLocation) {
+      setSimilarResults([]);
+      
+      window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
+        detail: { locationId: locationId }
+      }));
+    } else {
+      setSimilarResults([]);
+    }
+  };
+
+  const handleNavigationClick = (location) => {
+    console.log('Navigation to:', location.city, location.country);
+    
+    window.dispatchEvent(new CustomEvent('zoomToLocation', {
+      detail: { longitude: location.longitude, latitude: location.latitude, id: location.id }
+    }));
+    window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
+      detail: { locationId: location.id }
+    }));
+  };
 
   const createTilePolygon = (centerLng, centerLat, sizeMeters) => {
     const metersPerDegreeLat = 111320;
@@ -736,7 +883,6 @@ function ModernApp() {
 
   const getStaticMapImage = (longitude, latitude, width = 160, height = 160, zoom = 12) => {
     if (!mapboxToken || !longitude || !latitude) {
-      console.log('Missing mapbox token or coordinates:', { mapboxToken: !!mapboxToken, longitude, latitude });
       return '';
     }
     
@@ -748,190 +894,11 @@ function ModernApp() {
       const tilePath = `path-3+ffffff-0.90(${urlEncodedPolyline})`;
       
       const imageUrl = `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${tilePath}/${longitude},${latitude},${zoom}/${width}x${height}@2x?access_token=${mapboxToken}`;
-      console.log('Generated image URL for', longitude, latitude);
       return imageUrl;
     } catch (error) {
       console.error('Error generating static map image:', error);
       return '';
     }
-  };
-
-  const clearSelection = () => {
-    setSelectedLocations(new Set());
-    setCurrentSelectedLocation(null);
-    setPrimarySelectionId(null);
-    setSimilarResults([]);
-    // Don't clear city/country filters - they remain independent
-  };
-
-  const clearCitySelection = () => {
-    setCityFilteredLocations(new Set());
-    setSelectedCity('');
-    setSelectedCountry('');
-    setCityInput('');
-    setCountryInput('');
-  };
-
-  // Handle country selection with autocomplete
-  const handleCountrySelect = (country) => {
-    console.log('Country selected:', country);
-    setSelectedCountry(country);
-    setCountryInput(country);
-    setSelectedCity(''); // Clear city selection when country changes
-    setCityInput(''); // Clear city input when country changes
-    
-    // Find all locations for this country
-    const countryLocations = locations.filter(loc => loc.country === country);
-    const countryLocationIds = new Set(countryLocations.map(loc => loc.id));
-    
-    setCityFilteredLocations(countryLocationIds);
-    
-    // Calculate bounding box for all tiles in this country
-    if (countryLocations.length > 0) {
-      const lons = countryLocations.map(loc => loc.longitude);
-      const lats = countryLocations.map(loc => loc.latitude);
-      
-      const bbox = {
-        minLon: Math.min(...lons),
-        maxLon: Math.max(...lons),
-        minLat: Math.min(...lats),
-        maxLat: Math.max(...lats)
-      };
-      
-      // Add padding to bbox
-      const lonPadding = (bbox.maxLon - bbox.minLon) * 0.1 || 0.01;
-      const latPadding = (bbox.maxLat - bbox.minLat) * 0.1 || 0.01;
-      
-      // Zoom map to bbox
-      window.dispatchEvent(new CustomEvent('zoomToBbox', {
-        detail: { 
-          bbox: {
-            minLon: bbox.minLon - lonPadding,
-            maxLon: bbox.maxLon + lonPadding,
-            minLat: bbox.minLat - latPadding,
-            maxLat: bbox.maxLat + latPadding
-          }
-        }
-      }));
-    }
-  };
-
-  // Handle city selection with autocomplete
-  const handleCitySelect = (citySelection) => {
-    console.log('City selected:', citySelection);
-    
-    let city, country;
-    
-    if (selectedCountry && !citySelection.includes(',')) {
-      // If a country is already selected and city doesn't contain comma, it's just a city name
-      city = citySelection;
-      country = selectedCountry;
-    } else {
-      // Parse "City, Country" format
-      const parts = citySelection.split(', ');
-      if (parts.length >= 2) {
-        city = parts[0];
-        country = parts.slice(1).join(', '); // Handle countries with commas
-      } else {
-        console.warn('Invalid city selection format:', citySelection);
-        return;
-      }
-    }
-    
-    setSelectedCity(city);
-    setCityInput(citySelection);
-    
-    // If country wasn't already selected, select it now
-    if (!selectedCountry) {
-      setSelectedCountry(country);
-      setCountryInput(country);
-    }
-    
-    // Find all locations for this specific city
-    const cityLocations = locations.filter(loc => 
-      loc.city === city && loc.country === country
-    );
-    const cityLocationIds = new Set(cityLocations.map(loc => loc.id));
-    
-    setCityFilteredLocations(cityLocationIds);
-    
-    // Calculate bounding box for all tiles in this city
-    if (cityLocations.length > 0) {
-      const lons = cityLocations.map(loc => loc.longitude);
-      const lats = cityLocations.map(loc => loc.latitude);
-      
-      const bbox = {
-        minLon: Math.min(...lons),
-        maxLon: Math.max(...lons),
-        minLat: Math.min(...lats),
-        maxLat: Math.max(...lats)
-      };
-      
-      // Add padding to bbox
-      const lonPadding = (bbox.maxLon - bbox.minLon) * 0.1 || 0.01;
-      const latPadding = (bbox.maxLat - bbox.minLat) * 0.1 || 0.01;
-      
-      // Zoom map to bbox
-      window.dispatchEvent(new CustomEvent('zoomToBbox', {
-        detail: { 
-          bbox: {
-            minLon: bbox.minLon - lonPadding,
-            maxLon: bbox.maxLon + lonPadding,
-            minLat: bbox.minLat - latPadding,
-            maxLat: bbox.maxLat + latPadding
-          }
-        }
-      }));
-    }
-  };
-
-  // Primary selection - triggers similarity search and UMAP centering
-  // This overrides city/country selection when user clicks individual tiles
-  const handlePrimarySelection = (locationId) => {
-    console.log('Primary selection:', locationId);
-    
-    // Clear city/country selection when user selects individual tile
-    clearCitySelection();
-    
-    const newSelected = new Set();
-    let newCurrentLocation = null;
-
-    // Always select the new location
-    newSelected.add(locationId);
-    newCurrentLocation = locations.find(loc => loc.id === locationId);
-    
-    setSelectedLocations(newSelected);
-    setCurrentSelectedLocation(newCurrentLocation);
-    setPrimarySelectionId(locationId);
-    
-    if (newCurrentLocation) {
-      // Clear previous results - the similarity panel will handle finding new ones
-      setSimilarResults([]);
-      
-      // Center UMAP on this point
-      window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
-        detail: { locationId: locationId }
-      }));
-    } else {
-      setSimilarResults([]);
-    }
-  };
-
-  // Navigation only - just moves views without changing primary selection or selected card
-  const handleNavigationClick = (location) => {
-    console.log('Navigation to:', location.city, location.country);
-    
-    // DON'T update the selected location or visual selection
-    // DON'T change primarySelectionId or clear similarResults
-    // ONLY move the views to show this location
-    
-    // Move both map and UMAP to show this location
-    window.dispatchEvent(new CustomEvent('zoomToLocation', {
-      detail: { longitude: location.longitude, latitude: location.latitude, id: location.id }
-    }));
-    window.dispatchEvent(new CustomEvent('zoomToUmapPoint', {
-      detail: { locationId: location.id }
-    }));
   };
 
   if (loading) {
@@ -960,15 +927,29 @@ function ModernApp() {
 
   return (
     <div className="app">
-      {/* Enhanced Header with Autocomplete City/Country Selector */}
+      {/* Help Panel */}
+      <HelpPanel isOpen={showHelp} onClose={() => setShowHelp(false)} />
+
+      {/* Header */}
       <header className="header">
         <div className="header-content">
           <div className="header-left">
-            <h1>🛰️ Satellite Embeddings Explorer</h1>
+            <h1>
+              🛰️ Satellite Embeddings Explorer
+              <button 
+                className="help-button" 
+                onClick={() => setShowHelp(true)}
+                title="Show help (press ? key)"
+              >
+                ?
+              </button>
+            </h1>
+            <div className="header-stats">
+              {totalLocations} locations • {stats?.countries_count || 0} countries
+            </div>
           </div>
           
           <div className="header-center">
-            {/* Enhanced City/Country Selector with Autocomplete */}
             <div className="location-selector">
               <div className="selector-group">
                 <label>Country:</label>
@@ -1004,7 +985,6 @@ function ModernApp() {
               )}
             </div>
             
-            {/* Selection Info */}
             {(selectedCity || selectedCountry) && (
               <div className="filter-info">
                 <span className="filter-label">
@@ -1032,7 +1012,7 @@ function ModernApp() {
         </div>
       </header>
 
-      {/* Three-Panel Layout */}
+      {/* Main Layout */}
       <div className="main-container">
         {/* Map View */}
         <div className="viz-panel">
@@ -1067,23 +1047,27 @@ function ModernApp() {
           </div>
         </div>
 
-        {/* Enhanced Analysis Panel */}
+        {/* Analysis Panel - Only show after first selection */}
         <div className="analysis-panel">
           <div className="analysis-header">
             <h3>Similarity Analysis</h3>
           </div>
           <div className="analysis-content">
-            <EnhancedSimilarityPanel
-              selectedLocation={currentSelectedLocation}
-              primarySelectionId={primarySelectionId}
-              similarResults={similarResults}
-              setSimilarResults={setSimilarResults}
-              findingSimilar={findingSimilar}
-              setFindingSimilar={setFindingSimilar}
-              onNavigationClick={handleNavigationClick}
-              mapboxToken={mapboxToken}
-              locations={locations}
-            />
+            {!hasFirstSelection ? (
+              <WelcomePanel />
+            ) : (
+              <EnhancedSimilarityPanel
+                selectedLocation={currentSelectedLocation}
+                primarySelectionId={primarySelectionId}
+                similarResults={similarResults}
+                setSimilarResults={setSimilarResults}
+                findingSimilar={findingSimilar}
+                setFindingSimilar={setFindingSimilar}
+                onNavigationClick={handleNavigationClick}
+                mapboxToken={mapboxToken}
+                locations={locations}
+              />
+            )}
           </div>
         </div>
       </div>

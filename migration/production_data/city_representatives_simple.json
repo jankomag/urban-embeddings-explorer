@@ -9,6 +9,14 @@
       "tile_count": 32
     },
     {
+      "city": "Kabul",
+      "country": "Afghanistan",
+      "continent": "Asia",
+      "longitude": 69.19874098093173,
+      "latitude": 34.52149417119152,
+      "tile_count": 97
+    },
+    {
       "city": "Kandah\u0101r",
       "country": "Afghanistan",
       "continent": "Asia",
@@ -47,6 +55,14 @@
       "longitude": 15.755412692153397,
       "latitude": -12.77968864875059,
       "tile_count": 36
+    },
+    {
+      "city": "Luanda",
+      "country": "Angola",
+      "continent": "Africa",
+      "longitude": 13.328171469265055,
+      "latitude": -8.92197708658337,
+      "tile_count": 210
     },
     {
       "city": "Lubango",
@@ -113,12 +129,28 @@
       "tile_count": 281
     },
     {
+      "city": "Melbourne",
+      "country": "Australia",
+      "continent": "Australia",
+      "longitude": 145.05685103224133,
+      "latitude": -37.86165749421242,
+      "tile_count": 530
+    },
+    {
       "city": "Sydney",
       "country": "Australia",
       "continent": "Australia",
       "longitude": 151.02775993228155,
       "latitude": -33.85931408014068,
       "tile_count": 292
+    },
+    {
+      "city": "Vienna",
+      "country": "Austria",
+      "continent": "Europe",
+      "longitude": 16.38350223901484,
+      "latitude": 48.18820124426297,
+      "tile_count": 111
     },
     {
       "city": "Baku",
@@ -215,6 +247,14 @@
       "longitude": -47.991219549623345,
       "latitude": -15.835294782673447,
       "tile_count": 121
+    },
+    {
+      "city": "Rio de Janeiro",
+      "country": "Brazil",
+      "continent": "South America",
+      "longitude": -43.394269651680695,
+      "latitude": -22.82606454430675,
+      "tile_count": 307
     },
     {
       "city": "Salvador",
@@ -375,6 +415,22 @@
       "longitude": -73.07736673421006,
       "latitude": -36.78543277494702,
       "tile_count": 31
+    },
+    {
+      "city": "Santiago",
+      "country": "Chile",
+      "continent": "South America",
+      "longitude": -70.66107908449801,
+      "latitude": -33.454360488021976,
+      "tile_count": 233
+    },
+    {
+      "city": "Beijing",
+      "country": "China",
+      "continent": "Asia",
+      "longitude": 116.44697952295317,
+      "latitude": 39.96968876154359,
+      "tile_count": 944
     },
     {
       "city": "Chengdu",
@@ -569,6 +625,14 @@
       "tile_count": 22
     },
     {
+      "city": "Alexandria",
+      "country": "Egypt",
+      "continent": "Africa",
+      "longitude": 29.78301538567304,
+      "latitude": 31.062540982684258,
+      "tile_count": 179
+    },
+    {
       "city": "San Salvador",
       "country": "El Salvador",
       "continent": "North America",
@@ -623,6 +687,14 @@
       "longitude": 5.436123628273301,
       "latitude": 43.38148071300776,
       "tile_count": 115
+    },
+    {
+      "city": "Paris",
+      "country": "France",
+      "continent": "Europe",
+      "longitude": 2.3605425229671453,
+      "latitude": 48.82231268426776,
+      "tile_count": 441
     },
     {
       "city": "Libreville",
@@ -703,6 +775,14 @@
       "longitude": -2.8745983559432315,
       "latitude": 7.27941351822657,
       "tile_count": 8
+    },
+    {
+      "city": "Athens",
+      "country": "Greece",
+      "continent": "Europe",
+      "longitude": 23.797523707123997,
+      "latitude": 37.96080903346084,
+      "tile_count": 181
     },
     {
       "city": "Thessalon\u00edki",
@@ -793,6 +873,22 @@
       "tile_count": 232
     },
     {
+      "city": "Delhi",
+      "country": "India",
+      "continent": "Asia",
+      "longitude": 77.11803003400198,
+      "latitude": 28.575548504628898,
+      "tile_count": 412
+    },
+    {
+      "city": "Kolk\u0101ta",
+      "country": "India",
+      "continent": "Asia",
+      "longitude": 88.36878538543608,
+      "latitude": 22.670005679026193,
+      "tile_count": 231
+    },
+    {
       "city": "Mumbai",
       "country": "India",
       "continent": "Asia",
@@ -817,6 +913,14 @@
       "tile_count": 176
     },
     {
+      "city": "Surabaya",
+      "country": "Indonesia",
+      "continent": "Asia",
+      "longitude": 112.65801685029129,
+      "latitude": -7.399499981617375,
+      "tile_count": 235
+    },
+    {
       "city": "K\u0101sh\u0101n",
       "country": "Iran",
       "continent": "Asia",
@@ -831,6 +935,14 @@
       "longitude": 59.53570272744204,
       "latitude": 36.33905956948412,
       "tile_count": 141
+    },
+    {
+      "city": "Tehran",
+      "country": "Iran",
+      "continent": "Asia",
+      "longitude": 51.147664744964686,
+      "latitude": 35.706543589685616,
+      "tile_count": 481
     },
     {
       "city": "Al Ba\u015frah",
@@ -855,6 +967,14 @@
       "longitude": 45.406251174708956,
       "latitude": 35.555582902789645,
       "tile_count": 49
+    },
+    {
+      "city": "Baghdad",
+      "country": "Iraq",
+      "continent": "Asia",
+      "longitude": 44.369665963157,
+      "latitude": 33.30691533224991,
+      "tile_count": 222
     },
     {
       "city": "Mosul",
@@ -945,6 +1065,14 @@
       "tile_count": 33
     },
     {
+      "city": "Nagoya",
+      "country": "Japan",
+      "continent": "Asia",
+      "longitude": 136.90063009590634,
+      "latitude": 35.18419438756684,
+      "tile_count": 724
+    },
+    {
       "city": "Sapporo",
       "country": "Japan",
       "continent": "Asia",
@@ -959,6 +1087,14 @@
       "longitude": 36.19815651773719,
       "latitude": 32.333805625914344,
       "tile_count": 13
+    },
+    {
+      "city": "Amman",
+      "country": "Jordan",
+      "continent": "Asia",
+      "longitude": 35.93764840528148,
+      "latitude": 31.95967753364109,
+      "tile_count": 204
     },
     {
       "city": "Irbid",
@@ -1127,6 +1263,14 @@
       "longitude": 100.447539033913,
       "latitude": 5.3410679088207695,
       "tile_count": 75
+    },
+    {
+      "city": "Bamako",
+      "country": "Mali",
+      "continent": "Africa",
+      "longitude": -8.00498660203133,
+      "latitude": 12.67313522010787,
+      "tile_count": 90
     },
     {
       "city": "Nouakchott",
@@ -1305,6 +1449,22 @@
       "tile_count": 191
     },
     {
+      "city": "Ibadan",
+      "country": "Nigeria",
+      "continent": "Africa",
+      "longitude": 3.910137955063878,
+      "latitude": 7.40705121904158,
+      "tile_count": 165
+    },
+    {
+      "city": "Kano",
+      "country": "Nigeria",
+      "continent": "Africa",
+      "longitude": 8.523296835150106,
+      "latitude": 11.996118858142314,
+      "tile_count": 91
+    },
+    {
       "city": "Port Harcourt",
       "country": "Nigeria",
       "continent": "Africa",
@@ -1417,6 +1577,14 @@
       "tile_count": 24
     },
     {
+      "city": "Lima",
+      "country": "Peru",
+      "continent": "South America",
+      "longitude": -76.98492866054008,
+      "latitude": -12.026426786739368,
+      "tile_count": 291
+    },
+    {
       "city": "Trujillo",
       "country": "Peru",
       "continent": "South America",
@@ -1479,6 +1647,14 @@
       "longitude": 19.460662899261333,
       "latitude": 51.733989089909166,
       "tile_count": 68
+    },
+    {
+      "city": "Lisbon",
+      "country": "Portugal",
+      "continent": "Europe",
+      "longitude": -9.233962831289828,
+      "latitude": 38.779394316353915,
+      "tile_count": 121
     },
     {
       "city": "Porto",
@@ -1569,6 +1745,14 @@
       "tile_count": 206
     },
     {
+      "city": "Jeddah",
+      "country": "Saudi Arabia",
+      "continent": "Asia",
+      "longitude": 39.20700724248525,
+      "latitude": 21.568216350674255,
+      "tile_count": 264
+    },
+    {
       "city": "Mecca",
       "country": "Saudi Arabia",
       "continent": "Asia",
@@ -1583,6 +1767,14 @@
       "longitude": 39.59943639994147,
       "latitude": 24.464833110239706,
       "tile_count": 101
+    },
+    {
+      "city": "Riyadh",
+      "country": "Saudi Arabia",
+      "continent": "Asia",
+      "longitude": 46.735204047377806,
+      "latitude": 24.700032026131836,
+      "tile_count": 344
     },
     {
       "city": "Belgrade",
@@ -1705,12 +1897,28 @@
       "tile_count": 34
     },
     {
+      "city": "Barcelona",
+      "country": "Spain",
+      "continent": "Europe",
+      "longitude": 2.1455404501923088,
+      "latitude": 41.46776860430498,
+      "tile_count": 195
+    },
+    {
       "city": "Bilbao",
       "country": "Spain",
       "continent": "Europe",
       "longitude": -2.9700748878484218,
       "latitude": 43.29980510478569,
       "tile_count": 44
+    },
+    {
+      "city": "Madrid",
+      "country": "Spain",
+      "continent": "Europe",
+      "longitude": -3.702893147837143,
+      "latitude": 40.41526085377308,
+      "tile_count": 267
     },
     {
       "city": "M\u00e1laga",
@@ -1817,12 +2025,28 @@
       "tile_count": 29
     },
     {
+      "city": "Kaohsiung",
+      "country": "Taiwan",
+      "continent": "Asia",
+      "longitude": 120.29064467271047,
+      "latitude": 22.839031650452586,
+      "tile_count": 268
+    },
+    {
       "city": "Taichung",
       "country": "Taiwan",
       "continent": "Asia",
       "longitude": 120.55746925222505,
       "latitude": 24.090778805241662,
       "tile_count": 415
+    },
+    {
+      "city": "Taipei",
+      "country": "Taiwan",
+      "continent": "Asia",
+      "longitude": 121.35181271363751,
+      "latitude": 25.009441442303718,
+      "tile_count": 285
     },
     {
       "city": "Dushanbe",
@@ -1841,12 +2065,28 @@
       "tile_count": 48
     },
     {
+      "city": "Dar es Salaam",
+      "country": "Tanzania",
+      "continent": "Africa",
+      "longitude": 39.1867476644501,
+      "latitude": -6.82674612605545,
+      "tile_count": 232
+    },
+    {
       "city": "Mwanza",
       "country": "Tanzania",
       "continent": "Africa",
       "longitude": 32.94396684793616,
       "latitude": -2.5410024807404783,
       "tile_count": 55
+    },
+    {
+      "city": "Bangkok",
+      "country": "Thailand",
+      "continent": "Asia",
+      "longitude": 100.52977390175296,
+      "latitude": 13.715483404551202,
+      "tile_count": 564
     },
     {
       "city": "Chiang Mai",
@@ -1895,6 +2135,14 @@
       "longitude": 29.029351508174972,
       "latitude": 40.228026162782676,
       "tile_count": 79
+    },
+    {
+      "city": "\u0130zmir",
+      "country": "Turkey",
+      "continent": "Asia",
+      "longitude": 27.19320797274249,
+      "latitude": 38.38651347626153,
+      "tile_count": 98
     },
     {
       "city": "Ashgabat",
@@ -2025,12 +2273,28 @@
       "tile_count": 41
     },
     {
+      "city": "Chicago",
+      "country": "United States",
+      "continent": "North America",
+      "longitude": -87.86871833271024,
+      "latitude": 41.778645874663695,
+      "tile_count": 1149
+    },
+    {
       "city": "Dallas",
       "country": "United States",
       "continent": "North America",
       "longitude": -96.97826388760824,
       "latitude": 32.870472466306474,
       "tile_count": 1194
+    },
+    {
+      "city": "Los Angeles",
+      "country": "United States",
+      "continent": "North America",
+      "longitude": -117.90614283232289,
+      "latitude": 33.97466777045667,
+      "tile_count": 1526
     },
     {
       "city": "Miami",
@@ -2063,6 +2327,14 @@
       "longitude": 66.87449627223555,
       "latitude": 39.66011771258047,
       "tile_count": 126
+    },
+    {
+      "city": "Tashkent",
+      "country": "Uzbekistan",
+      "continent": "Asia",
+      "longitude": 69.24032418844108,
+      "latitude": 41.31183108063411,
+      "tile_count": 233
     },
     {
       "city": "Barquisimeto",
@@ -2177,6 +2449,6 @@
       "tile_count": 36
     }
   ],
-  "total_cities": 272,
-  "generation_timestamp": 1753731538.617307
+  "total_cities": 306,
+  "generation_timestamp": 1753898924.718936
 }

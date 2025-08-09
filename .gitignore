@@ -12,3 +12,6 @@ frontend/src/Appfull.js
 # Log files
 *.log
 *.pyc
+production_data/locations_metadata.json
+production_data/umap_coordinates.json
+legacy/*

@@ -932,7 +932,7 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLoc
       {umapData && (
         <div className="umap-stats">
           <small>
-            {umapData.total_points.toLocaleString()} points
+            {umapData.total_points.toLocaleString()} points 
             {cityFilteredLocations.size > 0 && ` • ${cityFilteredLocations.size} highlighted`}
           </small>
         </div>

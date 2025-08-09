@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Enhanced Embeddings Uploader - With Exact Tile Bounds
-====================================================
+Enhanced Embeddings Uploader - With Exact Tile Bounds and Always Updated UMAP
+===========================================================================
 
 This enhanced version extracts exact tile boundary coordinates from your
 GeoParquet files and includes them in the migration to both Qdrant and metadata files.
+UMAP is always recalculated to ensure consistency, even in incremental mode.
 """
 
 import os
@@ -453,6 +454,118 @@ class EnhancedEmbeddingsUploader:
         
         return all_metadata, np.array(all_embeddings)
     
+    def load_all_embeddings_from_qdrant(self) -> Tuple[List[Dict], np.ndarray]:
+        """Load all embeddings from Qdrant for UMAP recalculation."""
+        logger.info("📖 Loading all embeddings from Qdrant for UMAP recalculation...")
+        
+        collection_name = self.collections['regular']
+        
+        try:
+            all_points = []
+            offset = None
+            
+            # Scroll through all points in Qdrant
+            logger.info(f"🔄 Fetching all points from {collection_name}...")
+            while True:
+                points, next_offset = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True
+                )
+                
+                all_points.extend(points)
+                
+                if next_offset is None:
+                    break
+                offset = next_offset
+                
+                logger.info(f"   Loaded {len(all_points)} points so far...")
+            
+            logger.info(f"📊 Total points loaded from Qdrant: {len(all_points)}")
+            
+            # Convert to metadata and embeddings
+            metadata_list = []
+            embeddings = []
+            
+            for point in all_points:
+                # Extract metadata from Qdrant payload
+                metadata = {
+                    'id': point.id,
+                    'city': point.payload.get('city', ''),
+                    'country': point.payload.get('country', ''),
+                    'continent': point.payload.get('continent', 'Unknown'),
+                    'longitude': point.payload.get('longitude', 0.0),
+                    'latitude': point.payload.get('latitude', 0.0),
+                    'date': point.payload.get('date'),
+                    'original_tile_id': point.payload.get('original_tile_id', ''),
+                    'has_exact_bounds': point.payload.get('has_exact_bounds', False),
+                    # Note: tile_bounds are not stored in Qdrant payload, will be loaded from existing metadata
+                    'tile_bounds': None
+                }
+                
+                metadata_list.append(metadata)
+                embeddings.append(point.vector)
+            
+            return metadata_list, np.array(embeddings)
+            
+        except Exception as e:
+            logger.error(f"❌ Error loading embeddings from Qdrant: {e}")
+            raise
+    
+    def merge_metadata_with_bounds(self, qdrant_metadata: List[Dict]) -> List[Dict]:
+        """Merge Qdrant metadata with existing bounds information."""
+        logger.info("🔗 Merging Qdrant metadata with existing bounds information...")
+        
+        # Load existing metadata file if it exists
+        metadata_file = os.path.join(OUTPUT_DIR, 'locations_metadata.json')
+        existing_bounds = {}
+        
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r') as f:
+                existing_metadata = json.load(f)
+                
+            # Create lookup for bounds information
+            for item in existing_metadata:
+                location_id = item.get('id')
+                if location_id:
+                    existing_bounds[location_id] = {
+                        'tile_bounds': item.get('tile_bounds'),
+                        'has_exact_bounds': item.get('has_exact_bounds', False),
+                        'tile_width_degrees': item.get('tile_width_degrees'),
+                        'tile_height_degrees': item.get('tile_height_degrees')
+                    }
+            
+            logger.info(f"📄 Loaded bounds info for {len(existing_bounds)} existing locations")
+        
+        # Merge bounds information
+        enhanced_metadata = []
+        bounds_merged_count = 0
+        
+        for metadata in qdrant_metadata:
+            location_id = metadata['id']
+            
+            # Add bounds information if available
+            if location_id in existing_bounds:
+                bounds_info = existing_bounds[location_id]
+                metadata.update(bounds_info)
+                bounds_merged_count += 1
+            else:
+                # Set default values if no bounds info found
+                metadata.update({
+                    'tile_bounds': None,
+                    'has_exact_bounds': False,
+                    'tile_width_degrees': None,
+                    'tile_height_degrees': None
+                })
+            
+            enhanced_metadata.append(metadata)
+        
+        logger.info(f"🔗 Merged bounds info for {bounds_merged_count}/{len(enhanced_metadata)} locations")
+        
+        return enhanced_metadata
+    
     def upload_to_qdrant(self, metadata_list: List[Dict], regular_embeddings: np.ndarray):
         """Upload embeddings to Qdrant collections."""
         if len(metadata_list) == 0:
@@ -531,54 +644,64 @@ class EnhancedEmbeddingsUploader:
         # Save enhanced metadata
         self.save_enhanced_data(metadata_list, regular_embeddings, dataset_mean)
     
+    def compute_umap_for_all_data(self, metadata_list: List[Dict], regular_embeddings: np.ndarray) -> Dict:
+        """Compute UMAP coordinates for all data."""
+        logger.info("🗺️ Computing UMAP coordinates for all data...")
+        
+        n_samples = len(regular_embeddings)
+        n_neighbors = min(50, max(5, n_samples // 100))
+        
+        logger.info(f"🗺️ Computing UMAP with n_neighbors={n_neighbors} for {n_samples} samples")
+        
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=0.3,
+            metric='cosine',
+            random_state=42
+        )
+        
+        umap_coords = reducer.fit_transform(regular_embeddings)
+        
+        # Enhanced UMAP data with bounds information
+        umap_data = {
+            'umap_points': [
+                {
+                    'location_id': metadata['id'],
+                    'x': float(umap_coords[i][0]),
+                    'y': float(umap_coords[i][1]),
+                    'city': metadata['city'],
+                    'country': metadata['country'],
+                    'continent': metadata['continent'],
+                    'longitude': metadata['longitude'],
+                    'latitude': metadata['latitude'],
+                    'date': metadata['date'],
+                    # **ENHANCED: Include bounds information in UMAP data**
+                    'tile_bounds': metadata.get('tile_bounds'),
+                    'has_exact_bounds': metadata.get('has_exact_bounds', False)
+                }
+                for i, metadata in enumerate(metadata_list)
+            ],
+            'total_points': len(metadata_list),
+            'bounds_statistics': {
+                'tiles_with_exact_bounds': sum(1 for m in metadata_list if m.get('has_exact_bounds', False)),
+                'tiles_with_fallback_bounds': sum(1 for m in metadata_list if not m.get('has_exact_bounds', False)),
+                'exact_bounds_percentage': sum(1 for m in metadata_list if m.get('has_exact_bounds', False)) / len(metadata_list) * 100
+            }
+        }
+        
+        logger.info(f"✅ UMAP computation completed for {len(metadata_list)} points")
+        
+        return umap_data
+    
     def save_enhanced_data(self, metadata_list: List[Dict], regular_embeddings: np.ndarray, dataset_mean: np.ndarray):
-        """Save metadata with exact tile bounds information."""
+        """Save metadata with exact tile bounds information and always recalculate UMAP."""
         
         if FORCE_REUPLOAD:
             logger.info("💾 Computing UMAP and saving enhanced data with exact bounds...")
             
-            # Compute UMAP
-            n_samples = len(regular_embeddings)
-            n_neighbors = min(50, max(5, n_samples // 100))
-            
-            logger.info(f"🗺️ Computing UMAP with n_neighbors={n_neighbors}")
-            
-            reducer = umap.UMAP(
-                n_components=2,
-                n_neighbors=n_neighbors,
-                min_dist=0.3,
-                metric='cosine',
-                random_state=42
-            )
-            
-            umap_coords = reducer.fit_transform(regular_embeddings)
-            
-            # Enhanced UMAP data with bounds information
-            umap_data = {
-                'umap_points': [
-                    {
-                        'location_id': metadata['id'],
-                        'x': float(umap_coords[i][0]),
-                        'y': float(umap_coords[i][1]),
-                        'city': metadata['city'],
-                        'country': metadata['country'],
-                        'continent': metadata['continent'],
-                        'longitude': metadata['longitude'],
-                        'latitude': metadata['latitude'],
-                        'date': metadata['date'],
-                        # **ENHANCED: Include bounds information in UMAP data**
-                        'tile_bounds': metadata.get('tile_bounds'),
-                        'has_exact_bounds': metadata.get('has_exact_bounds', False)
-                    }
-                    for i, metadata in enumerate(metadata_list)
-                ],
-                'total_points': len(metadata_list),
-                'bounds_statistics': {
-                    'tiles_with_exact_bounds': sum(1 for m in metadata_list if m.get('has_exact_bounds', False)),
-                    'tiles_with_fallback_bounds': sum(1 for m in metadata_list if not m.get('has_exact_bounds', False)),
-                    'exact_bounds_percentage': sum(1 for m in metadata_list if m.get('has_exact_bounds', False)) / len(metadata_list) * 100
-                }
-            }
+            # Compute UMAP for new data only
+            umap_data = self.compute_umap_for_all_data(metadata_list, regular_embeddings)
             
             dataset_stats = {
                 'total_samples': len(metadata_list),
@@ -614,8 +737,8 @@ class EnhancedEmbeddingsUploader:
             logger.info(f"   Coverage: {bounds_stats['exact_bounds_percentage']:.1f}%")
         
         else:
-            # Incremental update logic
-            logger.info("💾 Updating existing metadata with exact bounds...")
+            # **ENHANCED: Always recalculate UMAP in incremental mode**
+            logger.info("💾 INCREMENTAL MODE: Always recalculating UMAP with all data...")
             
             # Load existing metadata
             metadata_file = os.path.join(OUTPUT_DIR, 'locations_metadata.json')
@@ -635,20 +758,46 @@ class EnhancedEmbeddingsUploader:
             
             logger.info(f"📄 Added {new_count} new metadata records")
             
-            # Update metadata file
+            # **ALWAYS RECALCULATE UMAP**: Load all embeddings from Qdrant and recompute UMAP
+            logger.info("🔄 Always recalculating UMAP coordinates for all data...")
+            
+            try:
+                # Load all embeddings from Qdrant
+                all_qdrant_metadata, all_qdrant_embeddings = self.load_all_embeddings_from_qdrant()
+                
+                # Merge with bounds information from existing metadata
+                enhanced_all_metadata = self.merge_metadata_with_bounds(all_qdrant_metadata)
+                
+                # Compute UMAP for ALL data (existing + new)
+                umap_data = self.compute_umap_for_all_data(enhanced_all_metadata, all_qdrant_embeddings)
+                
+                # Use the enhanced metadata for final save
+                final_metadata = enhanced_all_metadata
+                
+                logger.info(f"✅ UMAP recalculated for all {len(enhanced_all_metadata)} locations")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to load from Qdrant for UMAP recalculation: {e}")
+                logger.info("🔄 Falling back to incremental metadata update without UMAP recalculation")
+                
+                # Fallback: just update metadata, don't touch UMAP
+                final_metadata = existing_metadata
+                umap_data = None
+            
+            # Update metadata file with final metadata
             with open(metadata_file, 'w') as f:
-                json.dump(existing_metadata, f, indent=2)
-            logger.info(f"📄 Updated locations_metadata.json with {len(existing_metadata)} total records")
+                json.dump(final_metadata, f, indent=2)
+            logger.info(f"📄 Updated locations_metadata.json with {len(final_metadata)} total records")
             
             # Calculate enhanced statistics
-            exact_bounds_count = sum(1 for m in existing_metadata if m.get('has_exact_bounds', False))
-            fallback_bounds_count = len(existing_metadata) - exact_bounds_count
-            exact_bounds_percentage = (exact_bounds_count / len(existing_metadata)) * 100 if existing_metadata else 0
+            exact_bounds_count = sum(1 for m in final_metadata if m.get('has_exact_bounds', False))
+            fallback_bounds_count = len(final_metadata) - exact_bounds_count
+            exact_bounds_percentage = (exact_bounds_count / len(final_metadata)) * 100 if final_metadata else 0
             
             # Update dataset stats
             stats_file = os.path.join(OUTPUT_DIR, 'dataset_statistics.json')
             dataset_stats = {
-                'total_samples': len(existing_metadata),
+                'total_samples': len(final_metadata),
                 'embedding_dimension': 768,
                 'dataset_mean': dataset_mean.tolist(),
                 'collections': self.collections,
@@ -665,20 +814,33 @@ class EnhancedEmbeddingsUploader:
                 json.dump(dataset_stats, f, indent=2)
             logger.info(f"📄 Updated dataset_statistics.json")
             
-            # Log enhanced bounds statistics
-            logger.info(f"🎯 Enhanced Bounds Coverage:")
+            # Save UMAP coordinates if successfully computed
+            if umap_data:
+                umap_file = os.path.join(OUTPUT_DIR, 'umap_coordinates.json')
+                with open(umap_file, 'w') as f:
+                    json.dump(umap_data, f, indent=2)
+                logger.info(f"📄 Updated umap_coordinates.json with recalculated coordinates")
+                
+                # Log bounds statistics
+                bounds_stats = umap_data['bounds_statistics']
+                logger.info(f"🎯 Enhanced Bounds Coverage (All Data):")
+                logger.info(f"   Exact bounds: {bounds_stats['tiles_with_exact_bounds']}")
+                logger.info(f"   Fallback bounds: {bounds_stats['tiles_with_fallback_bounds']}")
+                logger.info(f"   Coverage: {bounds_stats['exact_bounds_percentage']:.1f}%")
+            else:
+                logger.warning("⚠️ UMAP coordinates NOT updated due to Qdrant loading error")
+            
+            # Log final statistics
+            logger.info(f"🎯 Final Enhanced Bounds Coverage:")
             logger.info(f"   Exact bounds: {exact_bounds_count}")
             logger.info(f"   Fallback bounds: {fallback_bounds_count}")
             logger.info(f"   Coverage: {exact_bounds_percentage:.1f}%")
+            logger.info(f"   New tiles added this run: {new_count}")
             
-            # Note: UMAP coordinates are NOT recomputed in incremental mode
-            logger.info("ℹ️ UMAP coordinates NOT recomputed in incremental mode")
-            logger.info("ℹ️ To get UMAP for new tiles, run with FORCE_REUPLOAD=True")
-        
         logger.info(f"💾 Enhanced data saved to {OUTPUT_DIR}")
     
     def run(self):
-        """Main execution method with enhanced bounds processing."""
+        """Main execution method with enhanced bounds processing and always-updated UMAP."""
         start_time = time.time()
         
         if FORCE_REUPLOAD:
@@ -686,7 +848,7 @@ class EnhancedEmbeddingsUploader:
             self.delete_all_collections()
             self.create_collections()
         else:
-            logger.info("➕ INCREMENTAL MODE: Enhanced processing with exact bounds")
+            logger.info("➕ INCREMENTAL MODE: Enhanced processing with exact bounds + UMAP recalculation")
             # Check if collections exist, create if not
             try:
                 collections = self.qdrant_client.get_collections().collections
@@ -707,6 +869,7 @@ class EnhancedEmbeddingsUploader:
         metadata_list, regular_embeddings = self.load_all_embeddings_enhanced()
         
         if len(metadata_list) > 0:
+            # Upload new tiles to Qdrant
             self.upload_to_qdrant(metadata_list, regular_embeddings)
             
             # Enhanced summary
@@ -715,20 +878,80 @@ class EnhancedEmbeddingsUploader:
             
             logger.info(f"\n🎉 Enhanced upload completed!")
             logger.info(f"⏱️ Duration: {duration:.1f} minutes")
-            logger.info(f"📊 Tiles uploaded: {len(metadata_list)}")
-            logger.info(f"🎯 Tiles with exact bounds: {exact_bounds_count}")
-            logger.info(f"📐 Exact bounds coverage: {exact_bounds_count/len(metadata_list)*100:.1f}%")
+            logger.info(f"📊 New tiles uploaded: {len(metadata_list)}")
+            logger.info(f"🎯 New tiles with exact bounds: {exact_bounds_count}")
+            logger.info(f"📐 New tiles exact bounds coverage: {exact_bounds_count/len(metadata_list)*100:.1f}%")
+            
         else:
             logger.info("✅ No new tiles to upload")
+            
+            # **EVEN IF NO NEW TILES: Still recalculate UMAP in incremental mode**
+            if not FORCE_REUPLOAD:
+                logger.info("🔄 No new tiles, but recalculating UMAP for consistency...")
+                
+                try:
+                    # Load all embeddings from Qdrant
+                    all_qdrant_metadata, all_qdrant_embeddings = self.load_all_embeddings_from_qdrant()
+                    
+                    if len(all_qdrant_embeddings) > 0:
+                        # Merge with bounds information
+                        enhanced_all_metadata = self.merge_metadata_with_bounds(all_qdrant_metadata)
+                        
+                        # Compute UMAP for ALL existing data
+                        umap_data = self.compute_umap_for_all_data(enhanced_all_metadata, all_qdrant_embeddings)
+                        
+                        # Compute dataset mean for consistency
+                        dataset_mean = all_qdrant_embeddings.mean(axis=0)
+                        
+                        # Save updated files
+                        metadata_file = os.path.join(OUTPUT_DIR, 'locations_metadata.json')
+                        with open(metadata_file, 'w') as f:
+                            json.dump(enhanced_all_metadata, f, indent=2)
+                        
+                        umap_file = os.path.join(OUTPUT_DIR, 'umap_coordinates.json')
+                        with open(umap_file, 'w') as f:
+                            json.dump(umap_data, f, indent=2)
+                        
+                        # Update stats
+                        exact_bounds_count = sum(1 for m in enhanced_all_metadata if m.get('has_exact_bounds', False))
+                        exact_bounds_percentage = (exact_bounds_count / len(enhanced_all_metadata)) * 100
+                        
+                        stats_file = os.path.join(OUTPUT_DIR, 'dataset_statistics.json')
+                        dataset_stats = {
+                            'total_samples': len(enhanced_all_metadata),
+                            'embedding_dimension': 768,
+                            'dataset_mean': dataset_mean.tolist(),
+                            'collections': self.collections,
+                            'force_reupload': FORCE_REUPLOAD,
+                            'timestamp': time.time(),
+                            'new_tiles_added': 0,
+                            'enhanced_features': {
+                                'exact_tile_bounds': True,
+                                'bounds_coverage_percentage': exact_bounds_percentage
+                            }
+                        }
+                        
+                        with open(stats_file, 'w') as f:
+                            json.dump(dataset_stats, f, indent=2)
+                        
+                        logger.info(f"✅ UMAP recalculated for {len(enhanced_all_metadata)} existing locations")
+                        logger.info(f"📊 Total bounds coverage: {exact_bounds_percentage:.1f}%")
+                        
+                    else:
+                        logger.warning("⚠️ No data found in Qdrant for UMAP recalculation")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Failed to recalculate UMAP: {e}")
 
 
 def main():
-    """Main function with enhanced bounds processing."""
-    logger.info("🛰️ Enhanced Embeddings Uploader - With Exact Tile Bounds")
-    logger.info("=" * 70)
+    """Main function with enhanced bounds processing and always-updated UMAP."""
+    logger.info("🛰️ Enhanced Embeddings Uploader - With Exact Tile Bounds & Always-Updated UMAP")
+    logger.info("=" * 80)
     logger.info(f"📁 Embeddings directory: {EMBEDDINGS_DIR}")
     logger.info(f"📁 Output directory: {OUTPUT_DIR}")
     logger.info(f"🔄 Force reupload: {FORCE_REUPLOAD}")
+    logger.info(f"🗺️ UMAP: Always recalculated for consistency")
     
     # Show the collection names that will be created
     collections = {
@@ -749,6 +972,7 @@ def main():
         uploader.run()
         logger.info("🎉 Enhanced script completed successfully!")
         logger.info("🎯 Exact tile bounds have been extracted and included in the migration!")
+        logger.info("🗺️ UMAP coordinates have been recalculated for all data!")
         logger.info("📝 Update your frontend and backend to use the enhanced models and MapView")
         return 0
     except Exception as e:
