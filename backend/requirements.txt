@@ -6,3 +6,4 @@ pandas==2.1.3
 pyarrow==14.0.1
 qdrant-client==1.7.0
 pydantic==2.5.0
+distutils==3.12.5
