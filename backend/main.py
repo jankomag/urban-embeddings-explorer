@@ -165,7 +165,7 @@ app.add_middleware(
         "http://localhost:3000",
         "https://urban-embeddings-explorer.vercel.app",  # Remove trailing slash
         "https://urban-embeddings-explorer-git-main-jankomags-projects.vercel.app",  # Remove trailing slash
-        "https://urban-embeddings-explorer-kpvnbn384-jankomags-projects.vercel.app",  # Remove trailing slash
+        "https://urban-embeddings-explorer-l4qazjkbk-jankomags-projects.vercel.app",
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "https://localhost:3000"
