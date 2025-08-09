@@ -1,5 +1,8 @@
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import os
 import json
 import asyncio
@@ -10,8 +13,25 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 import logging
 import gzip
-import json
-import os
+
+# Create rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app = FastAPI()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add rate limiting to expensive endpoints
+@app.get("/api/similarity/{location_id}")
+@limiter.limit("10/minute")  # Max 10 requests per minute per IP
+async def find_similar_locations(request: Request, location_id: int):
+    # Your existing code
+    pass
+
+@app.get("/api/locations")
+@limiter.limit("30/minute")  # Max 30 requests per minute per IP
+async def get_locations(request: Request):
+    # Your existing code
+    pass
 
 # Import your enhanced models
 from models import (
@@ -150,13 +170,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://urban-embeddings-explorer.vercel.app/",
+        "https://urban-embeddings-explorer-git-main-jankomags-projects.vercel.app/",
+        "https://urban-embeddings-explorer-kpvnbn384-jankomags-projects.vercel.app/",
         "http://127.0.0.1:3000",
         "http://localhost:3001",
-        "https://localhost:3000",
-        "*"  # Remove in production
+        "https://localhost:3000"
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
