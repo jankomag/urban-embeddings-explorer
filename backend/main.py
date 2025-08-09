@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 import logging
+import gzip
+import json
+import os
 
 # Import your enhanced models
 from models import (
@@ -20,6 +23,121 @@ from models import (
 
 # Load environment variables
 load_dotenv()
+
+def load_lightweight_data():
+    """Load enhanced lightweight metadata with exact bounds from gzipped files."""
+    try:
+        # Updated paths for Railway deployment
+        possible_paths = [
+            './production_data',  # Current structure
+            '../production_data', 
+            '/app/production_data',  # Railway deployment path
+            './backend/production_data'  # If running from root
+        ]
+        
+        data_dir = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                logger.info(f"📁 Found data directory: {data_dir}")
+                break
+        
+        if not data_dir:
+            raise FileNotFoundError(f"Data directory not found. Tried: {possible_paths}")
+        
+        # Load location metadata with bounds - try both .gz and .json
+        locations_file = os.path.join(data_dir, 'locations_metadata.json.gz')
+        if not os.path.exists(locations_file):
+            locations_file = os.path.join(data_dir, 'locations_metadata.json')
+        
+        if os.path.exists(locations_file):
+            if locations_file.endswith('.gz'):
+                with gzip.open(locations_file, 'rt') as f:
+                    locations = json.load(f)
+            else:
+                with open(locations_file, 'r') as f:
+                    locations = json.load(f)
+                    
+            # Count bounds statistics
+            exact_bounds_count = sum(1 for loc in locations if loc.get('has_exact_bounds', False))
+            total_count = len(locations)
+            
+            logger.info(f"📍 Loaded {total_count} location records")
+            logger.info(f"🎯 Exact bounds: {exact_bounds_count}/{total_count} ({exact_bounds_count/total_count*100:.1f}%)")
+        else:
+            raise FileNotFoundError(f"Locations metadata not found: {locations_file}")
+        
+        # Load city representatives - try both .gz and .json
+        city_file = os.path.join(data_dir, 'city_representatives.json.gz')
+        if not os.path.exists(city_file):
+            city_file = os.path.join(data_dir, 'city_representatives.json')
+        
+        if os.path.exists(city_file):
+            if city_file.endswith('.gz'):
+                with gzip.open(city_file, 'rt') as f:
+                    city_data = json.load(f)
+            else:
+                with open(city_file, 'r') as f:
+                    city_data = json.load(f)
+            logger.info(f"🏙️ Loaded {city_data['total_cities']} city representatives")
+        else:
+            logger.warning("⚠️ City representatives not found, will generate from locations")
+            city_data = None
+        
+        # Load UMAP coordinates - try both .gz and .json
+        umap_file = os.path.join(data_dir, 'umap_coordinates.json.gz')
+        if not os.path.exists(umap_file):
+            umap_file = os.path.join(data_dir, 'umap_coordinates.json')
+        
+        if os.path.exists(umap_file):
+            if umap_file.endswith('.gz'):
+                with gzip.open(umap_file, 'rt') as f:
+                    umap_coords = json.load(f)
+            else:
+                with open(umap_file, 'r') as f:
+                    umap_coords = json.load(f)
+            logger.info(f"🗺️ Loaded UMAP coordinates for {umap_coords['total_points']} points")
+            
+            # Log bounds statistics if available
+            if 'bounds_statistics' in umap_coords:
+                bounds_stats = umap_coords['bounds_statistics']
+                logger.info(f"📊 UMAP bounds coverage: {bounds_stats.get('exact_bounds_percentage', 0):.1f}%")
+        else:
+            logger.warning("⚠️ UMAP coordinates not found, will compute on-demand")
+            umap_coords = None
+        
+        # Load dataset statistics - try both .gz and .json
+        stats_file = os.path.join(data_dir, 'dataset_statistics.json.gz')
+        if not os.path.exists(stats_file):
+            stats_file = os.path.join(data_dir, 'dataset_statistics.json')
+        
+        if os.path.exists(stats_file):
+            if stats_file.endswith('.gz'):
+                with gzip.open(stats_file, 'rt') as f:
+                    stats = json.load(f)
+            else:
+                with open(stats_file, 'r') as f:
+                    stats = json.load(f)
+            logger.info(f"📊 Loaded dataset statistics")
+            
+            # Log enhanced features if available
+            if 'enhanced_features' in stats:
+                enhanced = stats['enhanced_features']
+                if enhanced.get('exact_tile_bounds'):
+                    logger.info(f"✅ Enhanced features: exact bounds coverage {enhanced.get('bounds_coverage_percentage', 0):.1f}%")
+                if enhanced.get('adaptive_mixed_aggregation'):
+                    logger.info(f"🔄 Adaptive mixed aggregation available")
+                    if 'adaptive_coverage_percentage' in enhanced:
+                        logger.info(f"🔄 Adaptive coverage: {enhanced['adaptive_coverage_percentage']:.1f}%")
+        else:
+            logger.warning("⚠️ Dataset statistics not found")
+            stats = None
+        
+        return locations, city_data, umap_coords, stats
+        
+    except Exception as e:
+        logger.error(f"❌ Error loading enhanced data: {e}")
+        raise
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -125,92 +243,92 @@ def setup_qdrant_client():
         logger.error(f"❌ Failed to connect to Qdrant: {e}")
         raise
 
-def load_lightweight_data():
-    """Load enhanced lightweight metadata with exact bounds."""
-    try:
-        possible_paths = [
-            './production_data',
-            '../production_data', 
-            './migration/production_data',
-            '../migration/production_data',
-            '/Users/janmagnuszewski/dev/terramind/embeddings/production_data'
-        ]
+# def load_lightweight_data():
+#     """Load enhanced lightweight metadata with exact bounds."""
+#     try:
+#         possible_paths = [
+#             './production_data',
+#             '../production_data', 
+#             './migration/production_data',
+#             '../migration/production_data',
+#             '/Users/janmagnuszewski/dev/terramind/embeddings/production_data'
+#         ]
         
-        data_dir = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                data_dir = path
-                logger.info(f"📁 Found data directory: {data_dir}")
-                break
+#         data_dir = None
+#         for path in possible_paths:
+#             if os.path.exists(path):
+#                 data_dir = path
+#                 logger.info(f"📁 Found data directory: {data_dir}")
+#                 break
         
-        if not data_dir:
-            raise FileNotFoundError(f"Data directory not found. Tried: {possible_paths}")
+#         if not data_dir:
+#             raise FileNotFoundError(f"Data directory not found. Tried: {possible_paths}")
         
-        # Load location metadata with bounds
-        locations_file = os.path.join(data_dir, 'locations_metadata.json')
-        if os.path.exists(locations_file):
-            with open(locations_file, 'r') as f:
-                locations = json.load(f)
+#         # Load location metadata with bounds
+#         locations_file = os.path.join(data_dir, 'locations_metadata.json')
+#         if os.path.exists(locations_file):
+#             with open(locations_file, 'r') as f:
+#                 locations = json.load(f)
                 
-                # Count bounds statistics
-                exact_bounds_count = sum(1 for loc in locations if loc.get('has_exact_bounds', False))
-                total_count = len(locations)
+#                 # Count bounds statistics
+#                 exact_bounds_count = sum(1 for loc in locations if loc.get('has_exact_bounds', False))
+#                 total_count = len(locations)
                 
-                logger.info(f"📍 Loaded {total_count} location records")
-                logger.info(f"🎯 Exact bounds: {exact_bounds_count}/{total_count} ({exact_bounds_count/total_count*100:.1f}%)")
-        else:
-            raise FileNotFoundError(f"Locations metadata not found: {locations_file}")
+#                 logger.info(f"📍 Loaded {total_count} location records")
+#                 logger.info(f"🎯 Exact bounds: {exact_bounds_count}/{total_count} ({exact_bounds_count/total_count*100:.1f}%)")
+#         else:
+#             raise FileNotFoundError(f"Locations metadata not found: {locations_file}")
         
-        # Load city representatives
-        city_file = os.path.join(data_dir, 'city_representatives.json')
-        if os.path.exists(city_file):
-            with open(city_file, 'r') as f:
-                city_data = json.load(f)
-                logger.info(f"🏙️ Loaded {city_data['total_cities']} city representatives")
-        else:
-            logger.warning("⚠️ City representatives not found, will generate from locations")
-            city_data = None
+#         # Load city representatives
+#         city_file = os.path.join(data_dir, 'city_representatives.json')
+#         if os.path.exists(city_file):
+#             with open(city_file, 'r') as f:
+#                 city_data = json.load(f)
+#                 logger.info(f"🏙️ Loaded {city_data['total_cities']} city representatives")
+#         else:
+#             logger.warning("⚠️ City representatives not found, will generate from locations")
+#             city_data = None
         
-        # Load UMAP coordinates with bounds
-        umap_file = os.path.join(data_dir, 'umap_coordinates.json')
-        if os.path.exists(umap_file):
-            with open(umap_file, 'r') as f:
-                umap_coords = json.load(f)
-                logger.info(f"🗺️ Loaded UMAP coordinates for {umap_coords['total_points']} points")
+#         # Load UMAP coordinates with bounds
+#         umap_file = os.path.join(data_dir, 'umap_coordinates.json')
+#         if os.path.exists(umap_file):
+#             with open(umap_file, 'r') as f:
+#                 umap_coords = json.load(f)
+#                 logger.info(f"🗺️ Loaded UMAP coordinates for {umap_coords['total_points']} points")
                 
-                # Log bounds statistics if available
-                if 'bounds_statistics' in umap_coords:
-                    bounds_stats = umap_coords['bounds_statistics']
-                    logger.info(f"📊 UMAP bounds coverage: {bounds_stats.get('exact_bounds_percentage', 0):.1f}%")
-        else:
-            logger.warning("⚠️ UMAP coordinates not found, will compute on-demand")
-            umap_coords = None
+#                 # Log bounds statistics if available
+#                 if 'bounds_statistics' in umap_coords:
+#                     bounds_stats = umap_coords['bounds_statistics']
+#                     logger.info(f"📊 UMAP bounds coverage: {bounds_stats.get('exact_bounds_percentage', 0):.1f}%")
+#         else:
+#             logger.warning("⚠️ UMAP coordinates not found, will compute on-demand")
+#             umap_coords = None
         
-        # Load dataset statistics
-        stats_file = os.path.join(data_dir, 'dataset_statistics.json')
-        if os.path.exists(stats_file):
-            with open(stats_file, 'r') as f:
-                stats = json.load(f)
-                logger.info(f"📊 Loaded dataset statistics")
+#         # Load dataset statistics
+#         stats_file = os.path.join(data_dir, 'dataset_statistics.json')
+#         if os.path.exists(stats_file):
+#             with open(stats_file, 'r') as f:
+#                 stats = json.load(f)
+#                 logger.info(f"📊 Loaded dataset statistics")
                 
-                # Log enhanced features if available
-                if 'enhanced_features' in stats:
-                    enhanced = stats['enhanced_features']
-                    if enhanced.get('exact_tile_bounds'):
-                        logger.info(f"✅ Enhanced features: exact bounds coverage {enhanced.get('bounds_coverage_percentage', 0):.1f}%")
-                    if enhanced.get('adaptive_mixed_aggregation'):
-                        logger.info(f"🔄 Adaptive mixed aggregation available")
-                        if 'adaptive_coverage_percentage' in enhanced:
-                            logger.info(f"🔄 Adaptive coverage: {enhanced['adaptive_coverage_percentage']:.1f}%")
-        else:
-            logger.warning("⚠️ Dataset statistics not found")
-            stats = None
+#                 # Log enhanced features if available
+#                 if 'enhanced_features' in stats:
+#                     enhanced = stats['enhanced_features']
+#                     if enhanced.get('exact_tile_bounds'):
+#                         logger.info(f"✅ Enhanced features: exact bounds coverage {enhanced.get('bounds_coverage_percentage', 0):.1f}%")
+#                     if enhanced.get('adaptive_mixed_aggregation'):
+#                         logger.info(f"🔄 Adaptive mixed aggregation available")
+#                         if 'adaptive_coverage_percentage' in enhanced:
+#                             logger.info(f"🔄 Adaptive coverage: {enhanced['adaptive_coverage_percentage']:.1f}%")
+#         else:
+#             logger.warning("⚠️ Dataset statistics not found")
+#             stats = None
         
-        return locations, city_data, umap_coords, stats
+#         return locations, city_data, umap_coords, stats
         
-    except Exception as e:
-        logger.error(f"❌ Error loading enhanced data: {e}")
-        raise
+#     except Exception as e:
+#         logger.error(f"❌ Error loading enhanced data: {e}")
+#         raise
 
 async def query_qdrant_similarity(
     target_location_id: int, 
