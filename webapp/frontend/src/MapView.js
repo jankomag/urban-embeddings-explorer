@@ -39,7 +39,7 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
     // Close popup when clicking on map (not on a feature)
     map.current.on('click', (e) => {
       const features = map.current.queryRenderedFeatures(e.point, {
-        layers: ['tiles-fill', 'points-layer']
+        layers: ['tiles-fill']
       });
       
       if (features.length === 0 && currentPopup.current) {
@@ -95,19 +95,15 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
       let hasExactBounds = false;
       
       // Check if location has exact tile bounds
-      if (location.tile_bounds && location.has_exact_bounds && Array.isArray(location.tile_bounds)) {
-        // Use exact bounds from the data
-        tileCoords = location.tile_bounds;
-        hasExactBounds = true;
-        exactBoundsCount++;
+      if (location.bounds && Array.isArray(location.bounds)) {
+          // Use exact bounds from the data
+          tileCoords = location.bounds;
+          hasExactBounds = true;
+          exactBoundsCount++;
       } else {
-        // Use fallback bounds around centroid
-        tileCoords = createFallbackTilePolygon(
-          location.longitude, 
-          location.latitude, 
-          FALLBACK_TILE_SIZE_METERS
-        );
-        fallbackBoundsCount++;
+          // Create fallback bounds
+          tileCoords = createFallbackTilePolygon(location.longitude, location.latitude, FALLBACK_TILE_SIZE_METERS);
+          fallbackBoundsCount++;
       }
 
       return {
@@ -144,6 +140,10 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
     if (!map.current.getLayer('tiles-fill')) {
       addMapLayers();
       addMapEventListeners();
+      
+      // *** FIX: Call updateTileStyles immediately after adding layers ***
+      // This ensures tiles are visible right away instead of waiting for hover
+      updateTileStyles();
     }
 
     // Update bounds statistics
@@ -169,32 +169,28 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
   // Update styles when selection or city filter changes
   const updateTileStyles = useCallback(() => {
     if (map.current && map.current.getLayer('tiles-fill')) {
-      // Fill color styling
+      // REMOVED RED FILL for selected locations - now transparent
       map.current.setPaintProperty('tiles-fill', 'fill-color', [
         'case',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b', // Selected locations - red
         ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
-        '#4a90e2', // City filtered locations - blue
-        'transparent'
+        '#4a90e2', // City filtered locations - blue (keep this)
+        'transparent' // All other tiles including selected ones - transparent
       ]);
 
       map.current.setPaintProperty('tiles-fill', 'fill-opacity', [
         'case',
-        ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        0.6, // Selected locations
         ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
         0.4, // City filtered locations
-        0
+        0 // All other tiles including selected ones - no fill
       ]);
 
-      // Unified border styling - white with transparency for all tiles
+      // Enhanced border styling - more visible selected state
       map.current.setPaintProperty('tiles-border', 'line-color', [
         'case',
         ['==', ['get', 'id'], hoveredLocationId.current || -1],
         '#4ecdc4', // Hovered - light blue
         ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        '#ff6b6b', // Selected - red
+        '#ffff00', // Selected - bright yellow (more visible than red)
         ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
         '#4a90e2', // City filtered - blue
         'rgba(255, 255, 255, 0.6)' // Default - white with transparency
@@ -205,7 +201,7 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
         ['==', ['get', 'id'], hoveredLocationId.current || -1],
         3, // Hovered
         ['in', ['get', 'id'], ['literal', Array.from(selectedLocations)]],
-        2, // Selected
+        3, // Selected - increased width for better visibility
         ['in', ['get', 'id'], ['literal', Array.from(cityFilteredLocations)]],
         2, // City filtered
         1.5 // Default
@@ -247,7 +243,7 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
   };
 
   const addMapEventListeners = () => {
-    // Tile interactions - Fixed hover detection
+    // Tile interactions
     map.current.on('mouseenter', 'tiles-fill', (e) => {
       map.current.getCanvas().style.cursor = 'pointer';
       hoveredLocationId.current = e.features[0].properties.id;
@@ -316,17 +312,18 @@ const MapView = ({ locations, selectedLocations, cityFilteredLocations, onLocati
 
     let statusIcon = '';
     if (isSelected) {
-      statusIcon = '✓';
+      statusIcon = '✔';
     } else if (isCityFiltered) {
       statusIcon = '🏙️';
     }
 
+    // Use CSS classes instead of inline styles for theme compatibility
     const popupHtml = `
-      <div style="font-size: 10px; line-height: 1.2; max-width: 160px;">
-        <div style="font-weight: 600; color: #1e293b; margin-bottom: 2px;">
+      <div class="popup-content">
+        <h4 class="popup-title">
           ${properties.city} ${statusIcon}
-        </div>
-        <div style="color: #64748b; margin-bottom: 3px;">
+        </h4>
+        <div class="popup-item popup-country">
           ${properties.country}
         </div>
       </div>

@@ -1,17 +1,22 @@
 data/*
 .env
-frontend/node_modules/*
+webapp/frontend/node_modules/*
 .DS_Store
-frontend/package-lock.json
+webapp/frontend/package-lock.json
 Thumbs.db
 224embeddings/*
+analysis/embeddings/*
+analysis/cached_stac_data/*
+analysis/production_data/*
+analysis/outputs/*
+
 # Build outputs
 /build
 /dist
-frontend/src/Appfull.js
+webapp/frontend/src/Appfull.js
+
 # Log files
 *.log
 *.pyc
-migration/production_data/locations_metadata.json
+webapp/legacy/*
 migration/production_data/umap_coordinates.json
-legacy/*

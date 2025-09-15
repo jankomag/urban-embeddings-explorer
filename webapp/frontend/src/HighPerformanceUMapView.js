@@ -1,6 +1,28 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as d3 from 'd3';
+import { useTheme } from './ThemeProvider'; // Import the theme hook
 
+// Color Legend Component
+function ColorLegend({ continentColors, className = '' }) {
+  return (
+    <div className={`color-legend ${className}`}>
+      <div className="legend-title">Continents</div>
+      <div className="legend-items">
+        {Object.entries(continentColors).map(([continent, color]) => (
+          <div key={continent} className="legend-item">
+            <div 
+              className="legend-color" 
+              style={{ backgroundColor: color }}
+            ></div>
+            <span className="legend-label">{continent}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Updated UMAP Component with proper theme integration
 const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLocations, onLocationSelect }) => {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -8,6 +30,9 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLoc
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  
+  // Use the proper theme hook instead of manual detection
+  const { isDark, theme } = useTheme();
   
   // Performance optimization refs
   const animationFrameRef = useRef(null);
@@ -20,10 +45,11 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLoc
   const dragDistanceRef = useRef(0);
   const transformRef = useRef({ k: 1, x: 0, y: 0 });
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
+  const resizeObserverRef = useRef(null);
 
-const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? process.env.REACT_APP_API_URL || 'http://localhost:8000'
-  : 'http://localhost:8000';
+  const API_BASE_URL = process.env.NODE_ENV === 'production' 
+    ? process.env.REACT_APP_API_URL || 'http://localhost:8000'
+    : 'http://localhost:8000';
 
   // Continent color mapping
   const continentColors = {
@@ -32,8 +58,8 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     'Europe': '#2ecc71',
     'North America': '#f39c12',
     'South America': '#9b59b6',
-    'Oceania': '#1abc9c',
-    'Antarctica': '#95a5a6'
+    'Oceania': '#95a5a6',
+    'Australia': '#95a5a6'
   };
 
   // Plot margins to ensure axes don't overlap with points
@@ -43,7 +69,23 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
   const DRAG_THRESHOLD_PX = 5;
   const DRAG_THRESHOLD_TIME = 150;
 
-  // Throttled resize handler for performance
+  // Get theme-appropriate outline color - directly from DOM to avoid stale closures
+  const getOutlineColor = useCallback(() => {
+    // Always get fresh theme state directly from DOM classes to avoid stale closures during animations
+    const isDarkMode = document.documentElement.classList.contains('dark-theme');
+    return isDarkMode ? '#5a5866' : '#fff';
+  }, []);
+
+  // Force re-render when theme changes - this is the key fix
+  useEffect(() => {
+    if (umapData && canvasRef.current && scalesRef.current.xScale) {
+      // Force immediate re-render with current theme
+      const ctx = canvasRef.current.getContext('2d');
+      renderPoints(ctx, umapData.umap_points, transformRef.current);
+    }
+  }, [isDark]); // React to theme changes immediately
+
+  // Enhanced resize handler with ResizeObserver for better performance
   const handleResize = useCallback(() => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -54,27 +96,62 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
       if (container) {
         const rect = container.getBoundingClientRect();
         const newDimensions = {
-          width: Math.max(400, rect.width - 40),
-          height: Math.max(300, rect.height - 40)
+          width: Math.max(400, rect.width),
+          height: Math.max(300, rect.height)
         };
-        setDimensions(newDimensions);
+        
+        // Only update if dimensions actually changed
+        if (newDimensions.width !== dimensions.width || newDimensions.height !== dimensions.height) {
+          setDimensions(newDimensions);
+        }
       }
     });
-  }, []);
+  }, [dimensions.width, dimensions.height]);
 
-  // Update dimensions on resize
+  // Set up ResizeObserver for better resize detection
   useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Initial size calculation
     handleResize();
-    window.addEventListener('resize', handleResize);
+
+    // Set up ResizeObserver for automatic canvas resizing
+    if (window.ResizeObserver) {
+      resizeObserverRef.current = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          const newDimensions = {
+            width: Math.max(400, width),
+            height: Math.max(300, height)
+          };
+          
+          if (newDimensions.width !== dimensions.width || newDimensions.height !== dimensions.height) {
+            setDimensions(newDimensions);
+          }
+        }
+      });
+      
+      resizeObserverRef.current.observe(container);
+    } else {
+      // Fallback to window resize event
+      window.addEventListener('resize', handleResize);
+    }
+
     return () => {
-      window.removeEventListener('resize', handleResize);
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+      } else {
+        window.removeEventListener('resize', handleResize);
+      }
+      
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
   }, [handleResize]);
 
-  // Fetch UMAP data
+  // Fetch UMAP data when locations are available
   useEffect(() => {
     if (locations.length > 0 && !umapData) {
       fetchUmapData();
@@ -193,8 +270,14 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     const { xScale, yScale } = scalesRef.current;
     
     ctx.save();
-    ctx.strokeStyle = '#dee2e6';
-    ctx.fillStyle = '#666';
+    
+    // Theme-aware axis colors - get fresh theme state directly from DOM to avoid stale closures
+    const isDarkMode = document.documentElement.classList.contains('dark-theme');
+    const axisColor = isDarkMode ? '#5a5866' : '#dee2e6';
+    const textColor = isDarkMode ? '#a09db0' : '#666';
+    
+    ctx.strokeStyle = axisColor;
+    ctx.fillStyle = textColor;
     ctx.lineWidth = 1;
     ctx.font = '11px sans-serif';
     
@@ -261,7 +344,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     ctx.restore();
   }, [dimensions]);
 
-  // Enhanced point rendering function with city filtering support
+  // Enhanced point rendering function with proper theme integration
   const renderPoints = useCallback((ctx, data, transform = { k: 1, x: 0, y: 0 }) => {
     if (!data || !scalesRef.current.xScale) return;
     
@@ -318,11 +401,15 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
       }
     });
     
+    // Get CURRENT theme outline color directly - use fresh theme state each render
+    const currentOutlineColor = getOutlineColor();
+    
     // Render in layers: regular -> city filtered -> selected -> hovered
     const renderLayer = (points, isSelected = false, isHovered = false, isCityFiltered = false) => {
       points.forEach(point => {
-        const baseRadius = isSelected ? 6 : (isCityFiltered ? 5 : 4);
-        const radius = isHovered ? baseRadius + 2 : baseRadius;
+        // REDUCED BASE SIZES - Made all points smaller
+        const baseRadius = isSelected ? 4 : (isCityFiltered ? 3.5 : 2.5);
+        const radius = isHovered ? baseRadius + 1.5 : baseRadius;
         const color = continentColors[point.continent] || '#666';
         
         // Apply opacity based on layer
@@ -331,7 +418,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
         } else if (isSelected || isHovered) {
           ctx.globalAlpha = 1.0; // Full opacity for selected/hovered
         } else {
-          ctx.globalAlpha = cityFilteredLocations.size > 0 ? 0.3 : 0.7; // Dimmed if city filter active
+          ctx.globalAlpha = cityFilteredLocations.size > 0 ? 0.25 : 0.6; // Reduced opacity for regular points
         }
         
         // Draw point
@@ -340,18 +427,18 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
         ctx.fillStyle = color;
         ctx.fill();
         
-        // Draw border
+        // Draw border with current theme-aware color
         if (isSelected || isHovered) {
           ctx.strokeStyle = isSelected ? '#ff6b6b' : '#ffd700';
-          ctx.lineWidth = isSelected ? 3 : 2;
+          ctx.lineWidth = isSelected ? 2 : 1.5;
           ctx.stroke();
         } else if (isCityFiltered) {
           ctx.strokeStyle = '#4a90e2';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 1.5;
           ctx.stroke();
         } else {
-          ctx.strokeStyle = '#fff';
-          ctx.lineWidth = 1;
+          ctx.strokeStyle = currentOutlineColor; // Use current theme outline color
+          ctx.lineWidth = 0.8;
           ctx.stroke();
         }
       });
@@ -364,7 +451,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     renderLayer(hoveredPoint, false, true);
     
     ctx.restore();
-  }, [dimensions, selectedLocations, cityFilteredLocations, continentColors, drawAxes]);
+  }, [dimensions, selectedLocations, cityFilteredLocations, continentColors, drawAxes, getOutlineColor]);
 
   // Center view on city tiles
   const centerOnCityTiles = (locationIds) => {
@@ -441,7 +528,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
         transformRef.current.y = startTransformY + (targetTransformY - startTransformY) * easedProgress;
         transformRef.current.k = startScale + (targetScale - startScale) * easedProgress;
         
-        // Render frame
+        // Render frame with current theme
         renderPoints(ctx, umapData.umap_points, transformRef.current);
         
         // Continue animation if not complete
@@ -495,7 +582,15 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
       // Set grabbing cursor during drag
       canvas.style.cursor = 'grabbing';
       
-      // Throttled redraw during drag
+      // Hide tooltip during dragging
+      hideTooltip();
+      
+      // Clear any hovered point during dragging
+      if (hoveredPointRef.current !== null) {
+        hoveredPointRef.current = null;
+      }
+      
+      // Throttled redraw during drag - ensure theme consistency
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -512,8 +607,9 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     lastMousePosRef.current = currentPos;
     
     // Find closest point by checking distance to all points (only in plot area)
+    // REDUCED SEARCH RADIUS for smaller points
     let closestPoint = null;
-    let minDistance = 15; // 15px search radius
+    let minDistance = 12; // Was 15px, now 12px search radius
     
     if (scalesRef.current.xScale && inPlotArea) {
       const { xScale, yScale } = scalesRef.current;
@@ -547,7 +643,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     if (hoveredPointRef.current !== newHoveredId) {
       hoveredPointRef.current = newHoveredId;
       
-      // Throttled redraw
+      // Throttled redraw with theme consistency
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -585,9 +681,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
   }, [dimensions]);
 
   const handleMouseUp = useCallback(() => {
-    if (isDraggingRef.current) {
-      // Mouse up logic here if needed
-    }
+    const wasDragging = isDraggingRef.current;
     
     isDraggingRef.current = false;
     dragStartTimeRef.current = null;
@@ -598,7 +692,19 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     if (canvasRef.current) {
       canvasRef.current.style.cursor = 'grab';
     }
-  }, []);
+    
+    // If we were dragging, hide tooltip and clear any hover state
+    if (wasDragging) {
+      hideTooltip();
+      hoveredPointRef.current = null;
+      
+      // Re-render to clear any hover highlighting with current theme
+      if (umapData && canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        renderPoints(ctx, umapData.umap_points, transformRef.current);
+      }
+    }
+  }, [umapData, renderPoints]);
 
   const handleWheel = useCallback((event) => {
     event.preventDefault();
@@ -625,7 +731,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     transformRef.current.y = mouseY - (mouseY - transformRef.current.y) * scaleChange;
     transformRef.current.k = newScale;
     
-    // Throttled redraw
+    // Throttled redraw with theme consistency
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
@@ -668,9 +774,9 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
       return;
     }
     
-    // Find closest point using same logic as hover
+    // Find closest point using same logic as hover with reduced radius
     let closestPoint = null;
-    let minDistance = 15; // 15px search radius
+    let minDistance = 12; // Reduced from 15px to match hover
     
     if (scalesRef.current.xScale) {
       const { xScale, yScale } = scalesRef.current;
@@ -715,8 +821,8 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
       tooltip.id = 'umap-tooltip';
       tooltip.style.cssText = `
         position: absolute;
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
+        background: var(--bg-overlay);
+        color: var(--text-primary);
         padding: 8px;
         border-radius: 4px;
         pointer-events: none;
@@ -724,6 +830,8 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
         z-index: 1000;
         opacity: 0;
         transition: opacity 0.2s;
+        border: 1px solid var(--border-primary);
+        box-shadow: var(--shadow-md);
       `;
       document.body.appendChild(tooltip);
     }
@@ -747,20 +855,33 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     }
   };
 
-  // Main rendering effect
+  // Main rendering effect - Enhanced canvas sizing
   useEffect(() => {
     if (!umapData || !canvasRef.current || !dimensions.width) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     
-    // Set up high DPI rendering
+    // Enhanced high DPI rendering with proper sizing
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = dimensions.width * dpr;
-    canvas.height = dimensions.height * dpr;
-    canvas.style.width = dimensions.width + 'px';
-    canvas.style.height = dimensions.height + 'px';
+    const displayWidth = dimensions.width;
+    const displayHeight = dimensions.height;
+    
+    // Set canvas size in memory (scaled for high DPI)
+    canvas.width = displayWidth * dpr;
+    canvas.height = displayHeight * dpr;
+    
+    // Set display size (CSS pixels)
+    canvas.style.width = displayWidth + 'px';
+    canvas.style.height = displayHeight + 'px';
+    
+    // Scale the context to match device pixel ratio
     ctx.scale(dpr, dpr);
+    
+    // Ensure canvas positioning
+    canvas.style.position = 'absolute';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
     
     // Create scales with proper margins
     const plotWidth = dimensions.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
@@ -784,7 +905,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     // Build spatial index
     quadtreeRef.current = buildQuadtree(umapData.umap_points);
 
-    // Initial render
+    // Initial render with current theme
     renderPoints(ctx, umapData.umap_points, transformRef.current);
 
     // Add event listeners
@@ -794,7 +915,10 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
     window.addEventListener('mouseup', handleMouseUp);     // Global to catch mouse up anywhere
     canvas.addEventListener('wheel', handleWheel);
     canvas.addEventListener('click', handleClick);
-    canvas.addEventListener('mouseleave', hideTooltip);
+    canvas.addEventListener('mouseleave', () => {
+      hideTooltip();
+      hoveredPointRef.current = null;
+    });
 
     return () => {
       canvas.removeEventListener('mousemove', handleMouseMove);
@@ -859,7 +983,7 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
         transformRef.current.x = startTransformX + (targetTransformX - startTransformX) * easedProgress;
         transformRef.current.y = startTransformY + (targetTransformY - startTransformY) * easedProgress;
         
-        // Render frame
+        // Render frame with current theme
         renderPoints(ctx, umapData.umap_points, transformRef.current);
         
         // Continue animation if not complete
@@ -900,20 +1024,30 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
 
   if (loading) {
     return (
-      <div className="loading-state">
-        <div className="spinner"></div>
-        <p>Computing UMAP embeddings...</p>
+      <div className="umap-container">
+        <div className="umap-plot" ref={containerRef}>
+          <div className="loading-state">
+            <div className="spinner"></div>
+            <p>Computing UMAP embeddings...</p>
+          </div>
+        </div>
+        <ColorLegend continentColors={continentColors} className="umap-legend" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="loading-state">
-        <p>{error}</p>
-        <button onClick={fetchUmapData} className="retry-btn">
-          Retry
-        </button>
+      <div className="umap-container">
+        <div className="umap-plot" ref={containerRef}>
+          <div className="loading-state">
+            <p>{error}</p>
+            <button onClick={fetchUmapData} className="retry-btn">
+              Retry
+            </button>
+          </div>
+        </div>
+        <ColorLegend continentColors={continentColors} className="umap-legend" />
       </div>
     );
   }
@@ -925,18 +1059,16 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
           ref={canvasRef}
           style={{ 
             cursor: 'grab',
-            display: 'block'
+            display: 'block',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%'
           }}
         />
+        <ColorLegend continentColors={continentColors} className="umap-legend" />
       </div>
-      {umapData && (
-        <div className="umap-stats">
-          <small>
-            {umapData.total_points.toLocaleString()} points 
-            {cityFilteredLocations.size > 0 && ` • ${cityFilteredLocations.size} highlighted`}
-          </small>
-        </div>
-      )}
     </div>
   );
 };
