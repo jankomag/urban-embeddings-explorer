@@ -1,5 +1,5 @@
 import React from 'react';
-import AutocompleteInput from './AutocompleteInput';
+import SearchInput from './SearchInput';
 import ThemeToggle from './ThemeToggle';
 
 function Header({
@@ -9,12 +9,7 @@ function Header({
   cityFilteredLocations,
   selectedCountry,
   selectedCity,
-  countryInput,
-  cityInput,
-  setCountryInput,
-  setCityInput,
-  allCountries,
-  availableCities,
+  locations, // Add locations prop for smart search
   handleCountrySelect,
   handleCitySelect,
   clearCitySelection,
@@ -31,36 +26,17 @@ function Header({
           </h1>
         </div>
         
-        {/* Center: Search */}
+        {/* Center: Smart Search */}
         <div className="header-center">
           <div className="search-container">
-            <AutocompleteInput
-              value={countryInput}
-              onChange={setCountryInput}
-              onSelect={handleCountrySelect}
-              options={allCountries}
-              placeholder="Search country..."
+            <SearchInput
+              locations={locations}
+              onCountrySelect={handleCountrySelect}
+              onCitySelect={handleCitySelect}
+              onClear={clearCitySelection}
+              selectedCountry={selectedCountry}
+              selectedCity={selectedCity}
             />
-            
-            <AutocompleteInput
-              value={cityInput}
-              onChange={setCityInput}
-              onSelect={handleCitySelect}
-              options={availableCities}
-              placeholder={selectedCountry ? "Search city..." : "Search city, country..."}
-              disabled={allCountries.length === 0}
-            />
-            
-            {(selectedCity || selectedCountry) && (
-              <button 
-                className="clear-search-btn" 
-                onClick={clearCitySelection}
-                title="Clear search"
-                aria-label="Clear search"
-              >
-                ✕
-              </button>
-            )}
             
             {/* Active filter indicator - now inline with search */}
             {(selectedCity || selectedCountry) && (

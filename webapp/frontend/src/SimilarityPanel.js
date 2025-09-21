@@ -13,11 +13,11 @@ const ZOOM_CONFIG = {
 
 // ***** NEW PAGINATION CONFIGURATION *****
 const PAGINATION_CONFIG = {
-  INITIAL_DISPLAY: 9,     // Show 9 tiles initially (3x3 grid)
-  BATCH_SIZE: 18,         // Load 18 tiles per batch (2x initial display)
-  MAX_TOTAL_RESULTS: 100, // Maximum total results to prevent infinite loading
-  AUTO_REFETCH_THRESHOLD: 3, // If less than 3 tiles after filtering, auto-refetch more
-  SMART_FETCH_MULTIPLIER: 3  // Fetch 3x more when we expect filtering
+  INITIAL_DISPLAY: 6,     // Show 9 tiles initially (3x3 grid)
+  BATCH_SIZE: 12,         // Load 18 tiles per batch (2x initial display)
+  MAX_TOTAL_RESULTS: 50, // Maximum total results to prevent infinite loading
+  AUTO_REFETCH_THRESHOLD: 2, // If less than 3 tiles after filtering, auto-refetch more
+  SMART_FETCH_MULTIPLIER: 2  // Fetch 3x more when we expect filtering
 };
 
 function SimilarityPanel({ 

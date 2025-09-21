@@ -24,8 +24,8 @@ function HelpPanel({ isOpen, onClose, totalLocations, stats }) {
               <span className="stat-label">Countries</span>
             </div>
             <div className="stat-item">
-              <span className="stat-number">{stats?.continents_count || 0}</span>
-              <span className="stat-label">Continents</span>
+              <span className="stat-number">{Math.round((parseInt(totalLocations?.replace(/,/g, '') || 0)) / 356) || 137}</span>
+              <span className="stat-label">Cities</span>
             </div>
             <div className="stat-item">
               <span className="stat-number">768</span>

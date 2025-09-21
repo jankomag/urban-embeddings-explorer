@@ -49,7 +49,7 @@ EMBEDDINGS_DIR = "/Users/janmagnuszewski/dev/terramind/embeddings/urban_embeddin
 OUTPUT_DIR = "./production_data"
 
 # Dimension analysis results file
-DIMENSION_ANALYSIS_FILE = "./spatial_correlation_analysis/spatial_correlation_results.json"
+DIMENSION_ANALYSIS_FILE = "./outputs/spatial_correlation_results.json"
 
 # Memory management settings
 CITY_BATCH_SIZE = 10  # Process 10 cities at a time

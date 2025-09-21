@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import './ModernApp.css';
 import MapView from './MapView';
-import HighPerformanceUMapView from './HighPerformanceUMapView';
+import UMapView from './UMapView';
 import HelpPanel, { WelcomePanel } from './HelpPanel';
 import Header from './Header';
 import SimilarityPanel from './SimilarityPanel';
@@ -318,12 +318,7 @@ function ModernApp() {
         cityFilteredLocations={cityFilteredLocations}
         selectedCountry={selectedCountry}
         selectedCity={selectedCity}
-        countryInput={countryInput}
-        cityInput={cityInput}
-        setCountryInput={setCountryInput}
-        setCityInput={setCityInput}
-        allCountries={allCountries}
-        availableCities={availableCities}
+        locations={locations} // Add this line - pass locations to Header
         handleCountrySelect={handleCountrySelect}
         handleCitySelect={handleCitySelect}
         clearCitySelection={clearCitySelection}
@@ -355,7 +350,7 @@ function ModernApp() {
             <h3>UMAP Embedding Space</h3>
           </div>
           <div className="viz-content">
-            <HighPerformanceUMapView
+            <UMapView
               locations={locations}
               selectedLocations={selectedLocations}
               cityFilteredLocations={cityFilteredLocations}

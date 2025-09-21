@@ -23,7 +23,7 @@ function ColorLegend({ continentColors, className = '' }) {
 }
 
 // Updated UMAP Component with proper theme integration
-const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLocations, onLocationSelect }) => {
+const UMapView = ({ locations, selectedLocations, cityFilteredLocations, onLocationSelect }) => {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [umapData, setUmapData] = useState(null);
@@ -1073,4 +1073,4 @@ const HighPerformanceUMapView = ({ locations, selectedLocations, cityFilteredLoc
   );
 };
 
-export default HighPerformanceUMapView;
+export default UMapView;

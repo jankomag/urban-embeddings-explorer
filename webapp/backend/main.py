@@ -11,12 +11,9 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 import logging
 import gzip
-
-# Create rate limiter
-limiter = Limiter(key_func=get_remote_address)
-app = FastAPI()
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from functools import lru_cache
 
 # Import simplified models
 from models import (
@@ -24,6 +21,29 @@ from models import (
     ConfigResponse, UMapResponse, SimilarLocation,
     PaginationInfo, UMapPoint, BoundsStatistics
 )
+
+# Add security middleware
+# app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*.railway.app", "localhost"])
+# app.add_middleware(HTTPSRedirectMiddleware)
+
+# @app.middleware("http")
+# async def add_security_headers(request, call_next):
+#     response = await call_next(request)
+#     response.headers["X-Content-Type-Options"] = "nosniff"
+#     response.headers["X-Frame-Options"] = "DENY"
+#     response.headers["X-XSS-Protection"] = "1; mode=block"
+#     return response
+
+@lru_cache(maxsize=1000)
+def get_cached_similarity(location_id: int, method: str, limit: int):
+    # Cache frequent queries in memory
+    pass
+
+# Create rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app = FastAPI()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Load environment variables
 load_dotenv()
@@ -124,10 +144,10 @@ qdrant_client = None
 COLLECTIONS = {
     'mean': 'satellite_embeddings_mean_filtered_nonspatial',
     'median': 'satellite_embeddings_median_filtered_nonspatial',
-    'min': 'satellite_embeddings_min_filtered_nonspatial',
-    'max': 'satellite_embeddings_max_filtered_nonspatial',
+    # 'min': 'satellite_embeddings_min_filtered_nonspatial',
+    # 'max': 'satellite_embeddings_max_filtered_nonspatial',
     'dominant_cluster': 'satellite_embeddings_dominant_cluster_filtered_nonspatial',
-    'global_contrastive': 'satellite_embeddings_global_contrastive_filtered_nonspatial'
+    # 'global_contrastive': 'satellite_embeddings_global_contrastive_filtered_nonspatial'
 }
 
 class SimilarityCache:
@@ -174,16 +194,20 @@ def setup_qdrant_client():
         if qdrant_api_key and qdrant_api_key != 'your_api_key_if_needed':
             client_kwargs['api_key'] = qdrant_api_key
         
-        client = QdrantClient(**client_kwargs)
+        qdrant_client = QdrantClient(
+            **client_kwargs,
+            prefer_grpc=True,
+            grpc_port=6334
+        )
         
         # Test connection
-        collections = client.get_collections()
+        collections = qdrant_client.get_collections()
         available_collection_names = [c.name for c in collections.collections]
         
         logger.info(f"✅ Connected to Qdrant")
         logger.info(f"📦 Found {len(available_collection_names)} collections")
         
-        return client
+        return qdrant_client
     except Exception as e:
         logger.error(f"❌ Failed to connect to Qdrant: {e}")
         raise
@@ -209,7 +233,7 @@ async def query_qdrant_similarity(
         target_vector = target_points[0].vector
         
         # Search for results
-        search_limit = max(500, (offset + limit) * 5)
+        search_limit = max(500, (offset + limit) * 2)
         
         search_results = qdrant_client.search(
             collection_name=collection_name,
@@ -335,15 +359,18 @@ async def root():
         "locations_loaded": len(locations_data) if locations_data else 0
     }
 
-@limiter.limit("10/minute")
+@limiter.limit("3/minute")
 @app.get("/api/similarity/{location_id}", response_model=SimilarityResponse)
 async def find_similar_locations(
     request: Request,
     location_id: int, 
     offset: int = Query(0, ge=0),
-    limit: int = Query(6, ge=1, le=50),
+    limit: int = Query(6, ge=1, le=20),
     method: str = Query("mean")
 ):
+    # Add usage tracking per IP
+    client_ip = request.client.host
+    
     """Find similar locations using Qdrant vector similarity."""
     if not qdrant_client:
         raise HTTPException(status_code=503, detail="Qdrant client not initialized")
@@ -432,8 +459,7 @@ async def find_similar_locations(
         logger.error(f"❌ Error in similarity search: {e}")
         raise HTTPException(status_code=500, detail=f"Similarity search failed: {str(e)}")
 
-# Add this endpoint since your frontend calls it
-@limiter.limit("30/minute")
+@limiter.limit("10/minute")
 @app.get("/api/locations", response_model=List[LocationData])
 async def get_locations(request: Request):
     """Get all locations."""
@@ -531,16 +557,16 @@ async def get_similarity_methods():
             "description": "Robust to outliers",
             "collection": COLLECTIONS["median"]
         },
-        "min": {
-            "name": "Min",
-            "description": "Shared baseline features", 
-            "collection": COLLECTIONS["min"]
-        },
-        "max": {
-            "name": "Max",
-            "description": "Distinctive features",
-            "collection": COLLECTIONS["max"]
-        },
+        # "min": {
+        #     "name": "Min",
+        #     "description": "Shared baseline features", 
+        #     "collection": COLLECTIONS["min"]
+        # },
+        # "max": {
+        #     "name": "Max",
+        #     "description": "Distinctive features",
+        #     "collection": COLLECTIONS["max"]
+        # },
         "dominant_cluster": {
             "name": "Dominant Cluster",
             "description": "Most frequent pattern",

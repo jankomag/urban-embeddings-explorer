@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
 """
-Improved Spatial Autocorrelation Analysis with Patch-Level Resolution
-=====================================================================
+Spatial Autocorrelation Analysis for Dimension Filtering
+========================================================
 
-This script identifies spatially correlated dimensions by analyzing:
-1. BETWEEN tiles: Do nearby tiles have similar values?
-2. WITHIN tiles: Do patches in the same tile have similar values?
-3. ACROSS cities: Generalize findings across diverse geographies
+Identifies spatially correlated dimensions in satellite image embeddings
+by analyzing spatial patterns at both tile and patch levels.
 
-Key improvements:
-- Analyzes individual patches, not just tile means
-- Better cutoff detection using gradient method
-- More robust spatial correlation metrics
-
-Usage:
-    python spatial_correlation_analysis.py
+Usage: python spatial_correlation.py
 """
 
 import os
@@ -34,151 +26,68 @@ from collections import defaultdict
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Configuration
-EMBEDDINGS_DIR = "./embeddings/urban_embeddings_224_terramind_normalised"
+EMBEDDINGS_DIR = "../../../terramind/embeddings/urban_embeddings_224_terramind_normalised"
 OUTPUT_DIR = "./outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Memory management
-MAX_TILES_PER_CITY = 100   # Tiles per city to analyze
-MIN_TILES_PER_CITY = 10   # Minimum for reliable statistics
-SAMPLE_PATCHES_PER_TILE = 50  # Sample patches from each tile (out of 196)
+MAX_TILES_PER_CITY = 200
+MIN_TILES_PER_CITY = 20
+EXCLUDED_FILES = []
 
-# Files to exclude
-EXCLUDED_FILES = ['dallas.gpq', 'chicago.gpq', 'miami.gpq']
+# Enhanced gradient sensitivity parameters
+GRADIENT_SENSITIVITY = 0.1  # Lower = more sensitive to curve bends (0.5-1.5)
+MIN_EXCLUSION_PCT = 3.0     # Minimum 3% exclusion
+MAX_EXCLUSION_PCT = 10.0
+ELBOW_WINDOW = 2            # Points to check for sustained low gradient
 
 
-class ImprovedSpatialAnalyzer:
-    """
-    Analyzes spatial autocorrelation at both tile and patch levels.
-    """
-    
+class SpatialAnalyzer:
     def __init__(self, n_dimensions=768):
         self.n_dimensions = n_dimensions
-        
-        # Store correlation scores
-        self.tile_correlations = defaultdict(list)  # Tile-to-tile correlations
-        self.patch_coherence = defaultdict(list)    # Within-tile patch coherence
-        
-        # Statistics
+        self.tile_correlations = defaultdict(list)
         self.cities_processed = 0
         self.tiles_analyzed = 0
         self.patches_analyzed = 0
     
-    def get_patch_locations(self, tile_center, tile_size_meters=2240):
-        """
-        Calculate approximate locations of patches within a tile.
-        
-        Assumes 14x14 grid of patches within each 2240m x 2240m tile.
-        
-        Args:
-            tile_center: (lon, lat) of tile center
-            tile_size_meters: Size of tile in meters
-        
-        Returns:
-            Array of (lon, lat) for each patch position
-        """
-        lon_center, lat_center = tile_center
-        
-        # Convert to approximate meters
-        meters_per_degree_lat = 111320.0
-        meters_per_degree_lon = 111320.0 * np.cos(np.radians(lat_center))
-        
-        # Each patch covers tile_size/14 meters
-        patch_size_meters = tile_size_meters / 14
-        
-        # Create 14x14 grid
-        patch_locations = []
-        for row in range(14):
-            for col in range(14):
-                # Offset from center in patches
-                row_offset = (row - 6.5) * patch_size_meters
-                col_offset = (col - 6.5) * patch_size_meters
-                
-                # Convert to degrees
-                lat_offset = row_offset / meters_per_degree_lat
-                lon_offset = col_offset / meters_per_degree_lon
-                
-                patch_locations.append([
-                    lon_center + lon_offset,
-                    lat_center + lat_offset
-                ])
-        
-        return np.array(patch_locations)
-    
-    def analyze_within_tile_coherence(self, patches):
-        """
-        Analyze how coherent patches are within a single tile.
-        
-        High coherence in a dimension means all patches in the tile
-        have similar values - suggesting that dimension encodes
-        broad spatial features rather than fine visual details.
-        
-        Args:
-            patches: Array of shape (196, 768)
-        
-        Returns:
-            Coherence score for each dimension
-        """
+    def analyze_patch_coherence(self, patches):
+        """Measure how coherent patches are within a tile."""
         coherence_scores = np.zeros(self.n_dimensions)
         
         for dim in range(self.n_dimensions):
             dim_values = patches[:, dim]
-            
-            # Measure coherence as inverse of coefficient of variation
-            # Low variance relative to mean = high coherence
             mean_val = np.mean(dim_values)
             std_val = np.std(dim_values)
             
             if abs(mean_val) > 1e-10:
-                # Coefficient of variation
                 cv = std_val / abs(mean_val)
-                # Convert to coherence score (inverse, bounded)
                 coherence_scores[dim] = 1.0 / (1.0 + cv)
             else:
-                # If mean is near zero, use just variance
                 coherence_scores[dim] = 1.0 / (1.0 + std_val)
         
         return coherence_scores
     
-    def analyze_tile_to_tile_correlation(self, tiles_data):
-        """
-        Analyze correlation between tile proximity and embedding similarity.
-        
-        Args:
-            tiles_data: List of (location, embedding) tuples
-        
-        Returns:
-            Correlation scores for each dimension
-        """
+    def analyze_tile_correlation(self, tiles_data):
+        """Analyze correlation between tile proximity and embedding similarity."""
         if len(tiles_data) < 2:
             return np.zeros(self.n_dimensions)
         
         locations = np.array([loc for loc, _ in tiles_data])
         embeddings = np.array([emb for _, emb in tiles_data])
         
-        # Calculate spatial distances (in degrees, good enough for small areas)
         spatial_distances = cdist(locations, locations, metric='euclidean')
-        
-        # Get unique pairs (upper triangle of distance matrix)
         n_tiles = len(tiles_data)
         pairs = [(i, j) for i in range(n_tiles) for j in range(i+1, n_tiles)]
         
-        # Limit number of pairs for efficiency
         if len(pairs) > 300:
             pairs = pairs[:300]
         
         correlation_scores = np.zeros(self.n_dimensions)
         
         for dim in range(self.n_dimensions):
-            # Get embedding distances for this dimension
             spatial_dists = []
             embedding_diffs = []
             
@@ -186,60 +95,44 @@ class ImprovedSpatialAnalyzer:
                 spatial_dists.append(spatial_distances[i, j])
                 embedding_diffs.append(abs(embeddings[i, dim] - embeddings[j, dim]))
             
-            # Calculate correlation
             if len(spatial_dists) > 10 and np.std(embedding_diffs) > 0:
-                # Negative correlation means close tiles have similar values
                 corr, _ = spearmanr(spatial_dists, embedding_diffs)
                 if not np.isnan(corr):
-                    # Convert to positive score where high = spatially correlated
                     correlation_scores[dim] = -corr
         
         return correlation_scores
     
     def process_city(self, file_path):
-        """
-        Process a single city file.
-        
-        Args:
-            file_path: Path to city .gpq file
-        
-        Returns:
-            Number of tiles processed
-        """
+        """Process a single city file."""
         city_name = os.path.basename(file_path).replace('.gpq', '')
         
         try:
-            # Load city data
             gdf = gpd.read_parquet(file_path)
             
             if len(gdf) < MIN_TILES_PER_CITY:
                 logger.warning(f"{city_name}: Too few tiles ({len(gdf)})")
                 return 0
             
-            # Convert categorical columns
             for col in gdf.columns:
                 if gdf[col].dtype.name == 'category':
                     gdf[col] = gdf[col].astype(str)
             
-            # Sample tiles if needed
             if len(gdf) > MAX_TILES_PER_CITY:
                 gdf = gdf.sample(n=MAX_TILES_PER_CITY, random_state=42)
             
             logger.info(f"Processing {city_name}: {len(gdf)} tiles")
             
-            tiles_data = []  # (location, mean_embedding) tuples
+            tiles_data = []
             coherence_accumulator = np.zeros(self.n_dimensions)
             valid_tiles = 0
             
             for _, row in gdf.iterrows():
-                # Get location
                 lon = row.get('centroid_lon') or row.get('longitude')
                 lat = row.get('centroid_lat') or row.get('latitude')
                 
                 if lon is None or lat is None:
                     continue
                 
-                # Get patches
                 full_embedding = row.get('embedding_patches_full')
                 
                 if full_embedding is not None:
@@ -252,11 +145,9 @@ class ImprovedSpatialAnalyzer:
                         if embedding_array.size == 196 * 768:
                             patches = embedding_array.reshape(196, 768)
                             
-                            # Analyze within-tile coherence
-                            coherence = self.analyze_within_tile_coherence(patches)
+                            coherence = self.analyze_patch_coherence(patches)
                             coherence_accumulator += coherence
                             
-                            # Store tile data for between-tile analysis
                             mean_embedding = np.mean(patches, axis=0)
                             tiles_data.append(([float(lon), float(lat)], mean_embedding))
                             
@@ -270,23 +161,17 @@ class ImprovedSpatialAnalyzer:
             if valid_tiles == 0:
                 return 0
             
-            # Average coherence scores
             avg_coherence = coherence_accumulator / valid_tiles
+            tile_correlation = self.analyze_tile_correlation(tiles_data)
             
-            # Analyze tile-to-tile correlation
-            tile_correlation = self.analyze_tile_to_tile_correlation(tiles_data)
-            
-            # Store results (weighted combination)
+            # Combine scores: 60% patch coherence + 40% tile correlation
             for dim in range(self.n_dimensions):
-                # Within-tile coherence is weighted more (0.6) than between-tile (0.4)
-                # because it directly measures spatial smoothness
                 combined_score = 0.6 * avg_coherence[dim] + 0.4 * tile_correlation[dim]
                 self.tile_correlations[dim].append(combined_score)
             
             self.cities_processed += 1
             self.tiles_analyzed += valid_tiles
             
-            # Cleanup
             del gdf, tiles_data
             gc.collect()
             
@@ -297,12 +182,7 @@ class ImprovedSpatialAnalyzer:
             return 0
     
     def compute_final_scores(self):
-        """
-        Compute final spatial correlation scores.
-        
-        Returns:
-            Array of scores and sorted indices
-        """
+        """Compute final spatial correlation scores."""
         final_scores = np.zeros(self.n_dimensions)
         
         for dim in range(self.n_dimensions):
@@ -317,93 +197,175 @@ class ImprovedSpatialAnalyzer:
         return final_scores
 
 
-def find_optimal_cutoff_gradient(scores):
+def find_elbow_cutoff(scores):
     """
-    Find optimal cutoff using gradient-based method.
-    
-    The cutoff is where the rate of change in spatial correlation
-    becomes small (the curve flattens).
-    
-    Args:
-        scores: Array of spatial correlation scores (sorted descending)
-    
-    Returns:
-        Cutoff information
+    Find optimal cutoff using enhanced elbow detection.
+    More sensitive to the actual bend in the curve.
     """
     n_dims = len(scores)
     
-    # Calculate gradient (rate of change)
-    gradients = np.abs(np.gradient(scores))
+    # Calculate second derivative (acceleration) to find curve bend
+    first_derivative = np.gradient(scores)
+    second_derivative = np.gradient(first_derivative)
     
-    # Smooth gradient to reduce noise
+    # Smooth second derivative to reduce noise
     window_size = 5
-    if len(gradients) > window_size:
-        smoothed_gradients = np.convolve(gradients, np.ones(window_size)/window_size, mode='valid')
-        # Pad to maintain size
-        smoothed_gradients = np.pad(smoothed_gradients, (window_size//2, window_size//2), mode='edge')
+    if len(second_derivative) > window_size:
+        smoothed_second_deriv = np.convolve(second_derivative, np.ones(window_size)/window_size, mode='valid')
+        smoothed_second_deriv = np.pad(smoothed_second_deriv, (window_size//2, window_size//2), mode='edge')
     else:
-        smoothed_gradients = gradients
+        smoothed_second_deriv = second_derivative
     
-    # Find elbow: where gradient drops below threshold
-    # Use adaptive threshold based on gradient distribution
+    # Find where curve starts to flatten (second derivative approaches zero)
+    # Focus on first 25% of dimensions where spatial correlation is high
+    search_range = int(n_dims * 0.25)
     
-    # Focus on first 30% of dimensions (where spatial correlation is high)
-    search_range = int(n_dims * 0.3)
-    gradients_subset = smoothed_gradients[:search_range]
+    # Enhanced elbow detection using multiple criteria
+    candidates = []
     
-    if len(gradients_subset) > 0:
-        # Threshold is 20th percentile of gradients in search range
-        threshold = np.percentile(gradients_subset, 20)
+    # Method 1: Second derivative threshold
+    abs_second_deriv = np.abs(smoothed_second_deriv[:search_range])
+    if len(abs_second_deriv) > 0:
+        threshold = np.percentile(abs_second_deriv, 25) * GRADIENT_SENSITIVITY
         
-        # Find first point where gradient stays below threshold
-        below_threshold = smoothed_gradients < threshold
-        
-        # Look for sustained flat region (at least 5 consecutive points below threshold)
-        cutoff_idx = None
-        for i in range(len(below_threshold) - 5):
-            if all(below_threshold[i:i+5]):
-                cutoff_idx = i
+        # Find sustained low curvature
+        for i in range(len(abs_second_deriv) - ELBOW_WINDOW):
+            if all(abs_second_deriv[i:i+ELBOW_WINDOW] < threshold):
+                candidates.append(i)
                 break
-        
-        if cutoff_idx is None:
-            # Fallback: use simple threshold crossing
-            flat_points = np.where(below_threshold)[0]
-            if len(flat_points) > 0:
-                cutoff_idx = flat_points[0]
-            else:
-                cutoff_idx = int(n_dims * 0.15)  # Default 15%
-    else:
-        cutoff_idx = int(n_dims * 0.15)
     
-    # Apply bounds: between 5% and 30% of dimensions
-    min_cutoff = int(n_dims * 0.05)
-    max_cutoff = int(n_dims * 0.30)
+    # Method 2: Gradient magnitude threshold
+    gradients = np.abs(np.gradient(scores[:search_range]))
+    if len(gradients) > 0:
+        grad_threshold = np.percentile(gradients, 15) * GRADIENT_SENSITIVITY
+        
+        for i in range(len(gradients) - ELBOW_WINDOW):
+            if all(gradients[i:i+ELBOW_WINDOW] < grad_threshold):
+                candidates.append(i)
+                break
+    
+    # Method 3: Relative change threshold
+    if len(scores) > 10:
+        max_score = np.max(scores[:10])  # Use top 10 as reference
+        relative_changes = []
+        for i in range(1, search_range):
+            if max_score > 0:
+                rel_change = abs(scores[i] - scores[i-1]) / max_score
+                relative_changes.append(rel_change)
+            else:
+                relative_changes.append(0)
+        
+        if len(relative_changes) > 0:
+            rel_threshold = np.percentile(relative_changes, 20) * GRADIENT_SENSITIVITY
+            
+            for i in range(len(relative_changes) - ELBOW_WINDOW):
+                if all(np.array(relative_changes[i:i+ELBOW_WINDOW]) < rel_threshold):
+                    candidates.append(i + 1)
+                    break
+    
+    # Choose the most conservative (earliest) cutoff from candidates
+    if candidates:
+        cutoff_idx = min(candidates)
+    else:
+        # Fallback to conservative percentage
+        cutoff_idx = int(n_dims * 0.08)  # 8% fallback
+    
+    # Apply bounds
+    min_cutoff = int(n_dims * MIN_EXCLUSION_PCT / 100)
+    max_cutoff = int(n_dims * MAX_EXCLUSION_PCT / 100)
     cutoff_idx = max(min_cutoff, min(cutoff_idx, max_cutoff))
     
     return {
         'cutoff_index': cutoff_idx,
         'dimensions_to_exclude': cutoff_idx,
         'exclusion_percentage': (cutoff_idx / n_dims) * 100,
-        'gradient_threshold': threshold if 'threshold' in locals() else 0,
-        'method': 'gradient'
+        'method': 'enhanced_elbow',
+        'sensitivity': GRADIENT_SENSITIVITY,
+        'candidates_found': len(candidates)
     }
 
 
-def create_analysis_plots(scores, sorted_indices, cutoff_info, output_dir):
-    """Create comprehensive visualization plots."""
+def create_threshold_plot(scores, sorted_indices, cutoff_info, output_dir, timestamp):
+    """Create clean plot showing dimension filtering threshold."""
+    fig, ax = plt.subplots(1, 1, figsize=(14, 8))
     
+    sorted_scores = scores[sorted_indices]
+    cutoff = cutoff_info['cutoff_index']
+    
+    x_values = np.arange(len(sorted_scores))
+    
+    # Plot all dimensions
+    ax.plot(x_values, sorted_scores, 'b-', linewidth=2, alpha=0.8, label='Spatial Correlation Score')
+    
+    # Highlight regions
+    ax.fill_between(x_values[:cutoff], 0, sorted_scores[:cutoff], 
+                    alpha=0.4, color='red', label=f'Excluded Dimensions ({cutoff})')
+    ax.fill_between(x_values[cutoff:], 0, sorted_scores[cutoff:], 
+                    alpha=0.3, color='green', label=f'Kept Dimensions ({len(sorted_scores) - cutoff})')
+    
+    # Cutoff line
+    ax.axvline(x=cutoff, color='red', linestyle='--', linewidth=3,
+               label=f'Cutoff at dimension {cutoff}')
+    
+    # Annotation
+    if cutoff < len(sorted_scores):
+        threshold_value = sorted_scores[cutoff]
+        ax.annotate(f'Threshold: {threshold_value:.4f}\n({cutoff_info["exclusion_percentage"]:.1f}% excluded)', 
+                   xy=(cutoff, threshold_value), 
+                   xytext=(cutoff + 50, threshold_value + 0.1),
+                   arrowprops=dict(arrowstyle='->', color='red', lw=2),
+                   fontsize=12, fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="red", alpha=0.8))
+    
+    # Styling
+    ax.set_xlabel('Dimension Index (Ranked by Spatial Correlation)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Spatial Correlation Score', fontsize=14, fontweight='bold')
+    ax.set_title('Spatial Correlation Analysis: Dimension Filtering Threshold\n'
+                f'Dimensions with high spatial correlation will be excluded from similarity search',
+                fontsize=16, fontweight='bold', pad=20)
+    
+    ax.grid(True, alpha=0.3, linestyle=':', linewidth=1)
+    ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+    
+    # Stats box
+    stats_text = (f"Total Dimensions: {len(sorted_scores)}\n"
+                 f"Excluded (Spatial): {cutoff} ({cutoff_info['exclusion_percentage']:.1f}%)\n"
+                 f"Kept (Visual): {len(sorted_scores) - cutoff} ({100 - cutoff_info['exclusion_percentage']:.1f}%)\n"
+                 f"Method: {cutoff_info['method']}\n"
+                 f"Sensitivity: {cutoff_info['sensitivity']}")
+    
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=11,
+            verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5", 
+                                             facecolor="lightblue", alpha=0.8))
+    
+    ax.set_xlim(-10, len(sorted_scores) + 10)
+    ax.set_ylim(min(0, np.min(sorted_scores) * 1.1), np.max(sorted_scores) * 1.1)
+    ax.tick_params(axis='both', which='major', labelsize=11)
+    
+    plt.tight_layout()
+    
+    plot_file = os.path.join(output_dir, f'dimension_filtering_threshold_{timestamp}.png')
+    plt.savefig(plot_file, dpi=300, bbox_inches='tight', facecolor='white')
+    logger.info(f"Threshold plot saved: {plot_file}")
+    plt.close()
+    
+    return plot_file
+
+
+def create_analysis_plots(scores, sorted_indices, cutoff_info, output_dir):
+    """Create comprehensive analysis plots."""
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     
     sorted_scores = scores[sorted_indices]
     cutoff = cutoff_info['cutoff_index']
     
-    # Plot 1: Spatial correlation curve with cutoff
+    # Plot 1: Main correlation curve
     ax1 = axes[0, 0]
     ax1.plot(sorted_scores, 'b-', linewidth=1.5, label='Spatial correlation')
     ax1.axvline(x=cutoff, color='red', linestyle='--', linewidth=2,
                 label=f'Cutoff ({cutoff} dims)')
     ax1.fill_between(range(cutoff), 0, sorted_scores[:cutoff], 
-                     alpha=0.3, color='red', label='Excluded (spatial)')
+                     alpha=0.3, color='red', label='Excluded')
     ax1.set_xlabel('Dimension (ranked)')
     ax1.set_ylabel('Spatial Correlation Score')
     ax1.set_title('Spatial Autocorrelation by Dimension')
@@ -415,16 +377,13 @@ def create_analysis_plots(scores, sorted_indices, cutoff_info, output_dir):
     gradients = np.abs(np.gradient(sorted_scores))
     ax2.plot(gradients, 'g-', alpha=0.7, label='Gradient')
     ax2.axvline(x=cutoff, color='red', linestyle='--', linewidth=2)
-    if 'gradient_threshold' in cutoff_info:
-        ax2.axhline(y=cutoff_info['gradient_threshold'], color='orange', 
-                   linestyle=':', label='Threshold')
     ax2.set_xlabel('Dimension (ranked)')
     ax2.set_ylabel('|Gradient|')
-    ax2.set_title('Gradient Analysis (Rate of Change)')
+    ax2.set_title('Gradient Analysis')
     ax2.legend()
     ax2.grid(alpha=0.3)
     
-    # Plot 3: Zoomed view of cutoff region
+    # Plot 3: Cutoff region zoom
     ax3 = axes[0, 2]
     zoom_start = max(0, cutoff - 20)
     zoom_end = min(len(sorted_scores), cutoff + 20)
@@ -436,76 +395,62 @@ def create_analysis_plots(scores, sorted_indices, cutoff_info, output_dir):
                      alpha=0.3, color='red')
     ax3.set_xlabel('Dimension (ranked)')
     ax3.set_ylabel('Spatial Correlation Score')
-    ax3.set_title('Zoomed View of Cutoff Region')
+    ax3.set_title('Cutoff Region Detail')
     ax3.grid(alpha=0.3)
     
-    # Plot 4: Distribution of scores
+    # Plot 4: Score distribution
     ax4 = axes[1, 0]
     ax4.hist(scores, bins=50, alpha=0.7, color='blue', edgecolor='black')
     threshold_value = sorted_scores[cutoff] if cutoff < len(sorted_scores) else 0
-    ax4.axvline(x=threshold_value, color='red', linestyle='--', linewidth=2,
-                label=f'Cutoff value')
+    ax4.axvline(x=threshold_value, color='red', linestyle='--', linewidth=2)
     ax4.set_xlabel('Spatial Correlation Score')
     ax4.set_ylabel('Number of Dimensions')
-    ax4.set_title('Distribution of Spatial Correlation')
-    ax4.legend()
+    ax4.set_title('Score Distribution')
     
-    # Plot 5: Top dimensions with labels
+    # Plot 5: Top dimensions
     ax5 = axes[1, 1]
     top_n = min(30, len(sorted_indices))
-    top_dims = sorted_indices[:top_n]
     top_scores = sorted_scores[:top_n]
     colors = ['red' if i < cutoff else 'blue' for i in range(top_n)]
-    bars = ax5.bar(range(top_n), top_scores, color=colors, alpha=0.7)
+    ax5.bar(range(top_n), top_scores, color=colors, alpha=0.7)
     ax5.set_xlabel('Rank')
     ax5.set_ylabel('Spatial Correlation')
-    ax5.set_title(f'Top {top_n} Spatially Correlated Dimensions')
-    # Add labels for top 10
-    for i in range(min(10, top_n)):
-        ax5.text(i, top_scores[i], f'd{top_dims[i]}', 
-                ha='center', va='bottom', fontsize=8)
+    ax5.set_title(f'Top {top_n} Dimensions')
     
-    # Plot 6: Cumulative explained spatial variance
+    # Plot 6: Cumulative variance
     ax6 = axes[1, 2]
     cumsum = np.cumsum(sorted_scores)
     total_correlation = np.sum(scores)
     cumsum_pct = (cumsum / total_correlation * 100) if total_correlation > 0 else cumsum
     ax6.plot(cumsum_pct, 'g-', linewidth=2)
     ax6.axvline(x=cutoff, color='red', linestyle='--', linewidth=2)
-    ax6.axhline(y=cumsum_pct[cutoff], color='red', linestyle=':', alpha=0.5)
     ax6.set_xlabel('Number of Dimensions')
     ax6.set_ylabel('Cumulative Spatial Information (%)')
-    ax6.set_title('Cumulative Spatial Correlation')
+    ax6.set_title('Cumulative Analysis')
     ax6.grid(alpha=0.3)
-    ax6.text(cutoff + 5, cumsum_pct[cutoff], 
-            f'{cumsum_pct[cutoff]:.1f}%', fontsize=10)
     
     plt.suptitle(f'Spatial Correlation Analysis: Excluding {cutoff} dimensions ({cutoff_info["exclusion_percentage"]:.1f}%)',
                  fontsize=14, fontweight='bold')
     plt.tight_layout()
     
-    # Save plot
     timestamp = int(time.time())
     plot_file = os.path.join(output_dir, f'spatial_correlation_analysis_{timestamp}.png')
     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-    logger.info(f"Plot saved: {plot_file}")
+    logger.info(f"Analysis plot saved: {plot_file}")
     plt.close()
+    
+    return timestamp
 
 
 def main():
     """Main execution function."""
-    logger.info("=" * 70)
-    logger.info("IMPROVED SPATIAL AUTOCORRELATION ANALYSIS")
-    logger.info("=" * 70)
-    logger.info("Analyzing both within-tile and between-tile spatial patterns")
+    logger.info("Spatial Autocorrelation Analysis")
+    logger.info("=" * 50)
     
     start_time = time.time()
     
-    # Find all city files
     pattern = os.path.join(EMBEDDINGS_DIR, "full_patch_embeddings", "*", "*.gpq")
     all_files = glob(pattern)
-    
-    # Filter excluded files
     files = [f for f in all_files if not any(excluded in os.path.basename(f) for excluded in EXCLUDED_FILES)]
     
     if not files:
@@ -513,68 +458,58 @@ def main():
         return 1
     
     logger.info(f"Found {len(files)} city files")
+    logger.info(f"Gradient sensitivity: {GRADIENT_SENSITIVITY} (lower = more sensitive)")
+    logger.info(f"Exclusion range: {MIN_EXCLUSION_PCT}% - {MAX_EXCLUSION_PCT}%")
     
-    # Initialize analyzer
-    analyzer = ImprovedSpatialAnalyzer()
+    analyzer = SpatialAnalyzer()
     
-    # Process cities
     for file_path in tqdm(files, desc="Analyzing cities"):
-        tiles_processed = analyzer.process_city(file_path)
+        analyzer.process_city(file_path)
         
         if analyzer.cities_processed % 10 == 0:
             gc.collect()
             logger.info(f"Progress: {analyzer.cities_processed} cities, "
-                       f"{analyzer.tiles_analyzed} tiles, "
-                       f"{analyzer.patches_analyzed:,} patches")
+                       f"{analyzer.tiles_analyzed} tiles")
     
-    # Compute final scores
-    logger.info("\nComputing final spatial correlation scores...")
+    logger.info("Computing final scores...")
     final_scores = analyzer.compute_final_scores()
     
-    # Sort dimensions by spatial correlation
     sorted_indices = np.argsort(final_scores)[::-1]
     sorted_scores = final_scores[sorted_indices]
     
-    # Find optimal cutoff using gradient method
-    cutoff_info = find_optimal_cutoff_gradient(sorted_scores)
-    
-    # Get excluded dimensions
+    cutoff_info = find_elbow_cutoff(sorted_scores)
     excluded_dimensions = sorted_indices[:cutoff_info['dimensions_to_exclude']].tolist()
     
-    # Create visualizations
-    create_analysis_plots(final_scores, sorted_indices, cutoff_info, OUTPUT_DIR)
+    # Create plots
+    timestamp = create_analysis_plots(final_scores, sorted_indices, cutoff_info, OUTPUT_DIR)
+    create_threshold_plot(final_scores, sorted_indices, cutoff_info, OUTPUT_DIR, timestamp)
     
     # Save results
     results = {
-        'analysis_type': 'spatial_autocorrelation_improved',
+        'analysis_type': 'spatial_autocorrelation',
         'analysis_params': {
             'cities_processed': analyzer.cities_processed,
             'tiles_analyzed': analyzer.tiles_analyzed,
             'patches_analyzed': analyzer.patches_analyzed,
-            'max_tiles_per_city': MAX_TILES_PER_CITY,
+            'gradient_sensitivity': GRADIENT_SENSITIVITY,
             'timestamp': time.time()
         },
         'cutoff_results': {
             'method': cutoff_info['method'],
+            'total_dimensions': len(final_scores),
             'dimensions_to_exclude': cutoff_info['dimensions_to_exclude'],
             'excluded_dimensions': [int(d) for d in excluded_dimensions],
             'exclusion_percentage': cutoff_info['exclusion_percentage'],
-            'gradient_threshold': cutoff_info.get('gradient_threshold', 0)
+            'sensitivity': cutoff_info['sensitivity'],
+            'candidates_found': cutoff_info['candidates_found']
         },
-        'top_30_spatial_dimensions': [
+        'top_spatial_dimensions': [
             {
                 'dimension': int(sorted_indices[i]),
                 'spatial_correlation': float(sorted_scores[i])
             }
-            for i in range(min(30, len(sorted_indices)))
-        ],
-        'interpretation': {
-            'within_tile_coherence': 'How similar patches are within same tile',
-            'between_tile_correlation': 'How similar nearby tiles are',
-            'combined_score': '60% within-tile + 40% between-tile',
-            'high_score_meaning': 'Dimension encodes spatial/geographic information',
-            'low_score_meaning': 'Dimension encodes visual features independent of location'
-        }
+            for i in range(min(20, len(sorted_indices)))
+        ]
     }
     
     output_file = os.path.join(OUTPUT_DIR, 'spatial_correlation_results.json')
@@ -583,19 +518,20 @@ def main():
     
     # Summary
     duration = (time.time() - start_time) / 60
-    logger.info("\n" + "=" * 70)
+    logger.info("\n" + "=" * 50)
     logger.info("ANALYSIS COMPLETE!")
     logger.info(f"Duration: {duration:.1f} minutes")
     logger.info(f"Cities: {analyzer.cities_processed}")
     logger.info(f"Tiles: {analyzer.tiles_analyzed}")
     logger.info(f"Patches: {analyzer.patches_analyzed:,}")
     logger.info(f"\nRESULTS:")
-    logger.info(f"Dimensions to exclude: {cutoff_info['dimensions_to_exclude']} ({cutoff_info['exclusion_percentage']:.1f}%)")
+    logger.info(f"Excluded dimensions: {cutoff_info['dimensions_to_exclude']} ({cutoff_info['exclusion_percentage']:.1f}%)")
     logger.info(f"Top 5 spatial dims: {excluded_dimensions[:5]}")
-    logger.info(f"Cutoff method: Gradient-based (curve flattening)")
-    logger.info(f"\nThese dimensions encode WHERE (location), not WHAT (visual).")
-    logger.info(f"Removing them focuses similarity on visual features.")
-    logger.info(f"\nResults saved: {output_file}")
+    logger.info(f"Sensitivity: {GRADIENT_SENSITIVITY}")
+    logger.info(f"Candidates found: {cutoff_info['candidates_found']}")
+    logger.info(f"\nFiles saved:")
+    logger.info(f"  - Results: {output_file}")
+    logger.info(f"  - Plots: outputs/spatial_correlation_*_{timestamp}.png")
     
     return 0
 

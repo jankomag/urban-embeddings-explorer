@@ -1,110 +1,113 @@
-# 🛰️ Urban Embeddings Analysis Pipeline
+# Analysis Pipeline
 
-This pipeline processes satellite imagery from cities worldwide to create AI-powered visual embeddings for similarity search.
+Satellite imagery processing pipeline for extracting TerraMind embeddings and preparing data for similarity search applications.
 
-## 🔄 Pipeline Overview
+## Overview
 
-1. **Extract Embeddings** → 2. **Find Spatial Correlations** → 3. **Generate UMAP** → 4. **Upload to Vector DB**
+This pipeline processes Sentinel-2 satellite imagery to create visual similarity embeddings using IBM TerraMind foundation model. The system identifies and removes spatially-biased dimensions to focus on visual content rather than geographic location, then prepares filtered embeddings for vector database storage.
 
----
+## Pipeline Components
 
-## 📁 Files & Purpose
+### 1. Embedding Extraction (`create_embeddings.py`)
 
-### 1. `create_embeddings.py` 🎯
+Extracts TerraMind embeddings from Sentinel-2 satellite imagery.
 
-**Purpose**: Downloads satellite imagery and extracts TerraMind vision embeddings  
-**Output**: Local GeoParquet files with 768-dimensional embeddings per tile
+**Process:**
 
-```bash
-# Install dependencies
-pip install terratorch geopandas pystac-client matplotlib torch dask
+- Downloads Sentinel-2 L2A data from STAC catalogs
+- Creates 224×224m tiles matching TerraMind input requirements
+- Processes tiles through TerraMind model (196 patches → 768 dimensions per tile)
+- Saves both aggregated embeddings and raw patch data
 
-# Configure and run
-python create_embeddings.py
-```
+**TerraMind Model:**
 
-**What it does**:
+- Model: `ibm-esa-geospatial/TerraMind-1.0-base`
+- Repository: https://github.com/IBM/terramind
+- Input: 224×224 pixels at 10m resolution
+- Output: 768-dimensional embeddings per 16×16 patch
 
-- Fetches Sentinel-2 satellite data from STAC catalogs
-- Creates 224×224m tiles for each city
-- Extracts embeddings using TerraMind model (196 patches → 768 dimensions)
-- Saves both aggregated embeddings and full patch data
-- Handles data quality control and caching
-
----
-
-### 2. `spatial-correlation.py` 🗺️
-
-**Purpose**: Identifies dimensions that encode geographic location rather than visual features  
-**Output**: `spatial_correlation_results.json` with excluded dimensions list
-
-```bash
-python spatial-correlation.py
-```
-
-**Why this matters**:
-
-- Some embedding dimensions encode "WHERE" (lat/lon) instead of "WHAT" (visual content)
-- Removing spatial dims improves similarity search quality
-- Focuses on visual patterns rather than geographic proximity
-
-**What it analyzes**:
-
-- Within-tile patch coherence (spatial smoothness)
-- Between-tile spatial correlation
-- Uses gradient-based cutoff detection
-
----
-
-### 3. `umap-generator.py` 📊
-
-**Purpose**: Creates 2D visualization coordinates from filtered embeddings  
-**Output**: `umap_coordinates_filtered.json` with dimension reduction
-
-```bash
-python umap-generator.py
-```
-
-**Process**:
-
-- Loads embeddings and applies dimension filtering
-- Generates UMAP coordinates using optimized parameters
-- Creates interactive 2D projection for web interface
-
-**UMAP Parameters**:
+**Configuration:**
 
 ```python
-UMAP_PARAMS = {
-    'n_components': 6,      # 6D intermediate space
-    'n_neighbors': 7,       # Local structure preservation
-    'min_dist': 1,          # Cluster tightness
-    'metric': 'cosine',     # Distance metric
-    'n_epochs': 500         # Training iterations
-}
+TILE_SIZE = 224                    # Matches TerraMind requirements
+SAVE_FULL_PATCH_EMBEDDINGS = True # Enables advanced aggregation
+MAX_TILES_PER_CITY = 100          # Memory management
 ```
 
-### 4. `data-migration.py` 🚀
+### 2. Spatial Correlation Analysis (`spatial-correlation.py`)
 
-**Purpose**: Prepares filtered embeddings for vector database with multiple aggregation methods  
-**Output**: 6 collections with different similarity approaches
+Identifies embedding dimensions that encode geographic location rather than visual features.
 
-**Creates 6 Collections**:
+**Analysis Method:**
 
-- `mean`: Standard patch averaging
-- `median`: Robust to outliers
-- `min/max`: Conservative/distinctive features
-- `dominant_cluster`: Most frequent visual patterns
-- `global_contrastive`: Dataset-relative encoding
+- Measures spatial autocorrelation within tiles (patch coherence)
+- Calculates correlation between tile proximity and embedding similarity
+- Uses gradient-based cutoff detection
+- Generates statistical plots and dimension exclusion results, like this one:
 
-**Why multiple methods**: Different aggregations capture different visual aspects, enabling diverse similarity search modes.
+![Spatial Correlation Analysis](../../res/spatial_correlation_analysis.png)
 
-## 📊 Output Structure
+**Output:** `spatial_correlation_results.json` with excluded dimensions list
+
+### 3. UMAP Coordinate Generation (`umap-generator.py`)
+
+Creates 2D visualization coordinates from filtered embeddings.
+
+**Process:**
+
+- Loads embeddings and applies identical dimension filtering
+- Computes UMAP projection using optimized parameters
+- Generates precomputed coordinates for interactive web visualization
+
+### 4. Vector Database Migration (`data-migration.py`)
+
+Prepares filtered embeddings for vector database with multiple aggregation strategies.
+
+**Aggregation Methods:**
+
+- `mean`
+- `median`
+- `dominant_cluster`: First clusters all 196 pacthes in a tile and extractes the mean of the most frequent cluster
+- `global_contrastive`: Average of all patches in the tile minus global mean
+
+## Execution Sequence
+
+```bash
+# 1. Extract TerraMind embeddings
+python create_embeddings.py
+
+# 2. Analyze spatial correlations
+python spatial-correlation.py
+
+# 3. Generate UMAP coordinates
+python umap-generator.py
+
+# 4. Upload to vector database
+python data-migration.py
+```
+
+## Technical Requirements
+
+**Dependencies:**
+
+```bash
+pip install terratorch geopandas qdrant-client umap-learn scikit-learn
+```
+
+**System Requirements:**
+
+- Python 3.10+
+- GDAL for geospatial processing
+- 12GB+ RAM for city batch processing
+- GPU recommended for TerraMind inference
+
+## Output Structure
 
 ```
 embeddings/
 ├── urban_embeddings_224_terramind_normalised/
-│   ├── tile_embeddings/           # Aggregated embeddings
-│   └── full_patch_embeddings/     # Raw patch data
+│   ├── tile_embeddings/           # Aggregated tile embeddings
+│   └── full_patch_embeddings/     # Raw 196×768 patch data
 ├── production_data/
 │   ├── umap_coordinates_filtered.json
 │   ├── locations_metadata.json
@@ -113,21 +116,12 @@ embeddings/
     └── spatial_correlation_results.json
 ```
 
-## ⚙️ Configuration
+## Key Innovation
 
-Key settings in each script:
+**Patch-Level Filtering:** The pipeline applies dimension filtering to raw 196×768 patch embeddings before aggregation, ensuring spatial bias removal affects the fundamental building blocks rather than just final aggregated vectors.
 
-- `TILE_SIZE = 224`: Matches TerraMind input requirements
-- `SAVE_FULL_PATCH_EMBEDDINGS = True`: Enables advanced aggregation methods
-- `MAX_TILES_PER_CITY = 100`: Memory management for analysis
-- City filtering via `EXCLUDED_FILES` for problematic areas
+## Data Quality
 
-## 🎯 Why This Pipeline?
-
-1. **TerraMind Embeddings**: State-of-the-art satellite imagery understanding
-2. **Dimension Filtering**: Removes geographic bias, focuses on visual similarity
-3. **Multiple Aggregations**: Captures different aspects of urban visual patterns
-4. **Vector Database**: Enables fast similarity search at scale
-5. **UMAP Visualization**: Makes high-dimensional data explorable
-
-The result: An AI system that finds visually similar urban areas worldwide based on satellite imagery patterns! 🌍
+**Spatial Bias Removal:** Excluded roughly 8% of dimensions identified as most representative of geographic location
+**Consistency:** Identical filtering applied across UMAP generation and vector database preparation
+**Validation:** Comprehensive logging and statistical analysis of filtering effectiveness

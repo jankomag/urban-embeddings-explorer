@@ -1,157 +1,177 @@
-# 🌍 Urban Embeddings Explorer Web App
+# Web Application
 
-Interactive web application for exploring visually similar urban areas using AI-powered satellite imagery analysis.
+Interactive web interface for exploring urban visual similarity using TerraMind embeddings and vector search.
 
-## 🌐 Live Application
+## Overview
 
-**[Explore the deployed app here →](YOUR_DEPLOYED_URL_HERE)**
+React-based web application with FastAPI backend that enables real-time similarity search across global urban satellite imagery. Users can click any location to find visually similar urban areas using multiple AI aggregation methods.
 
-## 🏗️ Architecture
+## Architecture
 
-**Frontend** (React) ↔️ **Backend** (FastAPI) ↔️ **Vector DB** (Qdrant)
-
----
-
-## 📁 Backend Files
-
-### Core Application
-
-- **`main.py`** 🚀: FastAPI server with similarity search endpoints
-- **`models.py`** 📝: Pydantic data models for API requests/responses
-- **`database.py`** 🗄️: Database connection utilities (PostgreSQL optional)
-
-### Configuration
-
-- **`requirements.txt`** 📦: Python dependencies
-- **`railway.toml`** 🚂: Railway.app deployment config
-- **`runtime.txt`** 🐍: Python version specification
-
-### Data
-
-- **`production_data/`** 📊:
-  - `locations_metadata.json.gz`: City locations and metadata
-  - `umap_coordinates.json.gz`: 2D visualization coordinates
-
-## 🖥️ Frontend Files
-
-### Core Components
-
-- **`index.js`** 🎯: Main app component with state management
-- **`MapView.js`** 🗺️: Interactive Mapbox satellite map
-- **`HighPerformanceUMapView.js`** 📊: Canvas-based UMAP visualization
-- **`SimilarityPanel.js`** 🔍: Search results and controls
-
-### UI Components
-
-- **`Header.js`** 📱: Navigation bar with search and filters
-- **`HelpPanel.js`** ❓: Documentation and method explanations
-- **`AutocompleteInput.js`** 🔎: Smart city/country search
-- **`ThemeProvider.js`** 🎨: Dark/light mode management
-- **`ThemeToggle.js`** 🌓: Theme switcher button
-
-### Styling
-
-- **`ModernApp.css`** 💄: Main application styles with CSS variables
-- **`HelpPanel.css`** 📖: Help modal specific styles
-
-### Configuration
-
-- **`package.json`** 📦: Node.js dependencies and scripts
-- **`public/index.html`** 🌐: HTML entry point
-
-## 🔧 Development Setup
-
-For local development:
-
-```bash
-# Backend
-cd webapp/backend
-pip install -r requirements.txt
-uvicorn main:app --reload
-
-# Frontend
-cd webapp/frontend
-npm install && npm start
+```
+React Frontend ←→ FastAPI Backend ←→ Qdrant Vector Database
+      ↓                                      ↓
+   Mapbox Maps                        TerraMind Embeddings
+   UMAP Visualization                 Similarity Search
 ```
 
-Requires environment variables: `MAPBOX_TOKEN`, `QDRANT_URL`
+## Technology Stack
 
----
+### Frontend (`frontend/`)
 
-## 🔌 API Endpoints
+**Core Framework:**
 
-### Core Endpoints
+- React 18 with functional components and hooks
+- Create React App build system
+- Modern ES6+ JavaScript
 
-- `GET /api/locations` 📍: All city locations with coordinates
-- `GET /api/similarity/{id}` 🔍: Find similar locations using vector search
-- `GET /api/umap` 📊: 2D coordinates for visualization
-- `GET /api/stats` 📈: Dataset statistics and metadata
+**Mapping & Visualization:**
 
-### Configuration
+- Mapbox GL JS for satellite imagery and interactive maps
+- Custom UMAP scatter plot visualization using HTML5 Canvas
+- Responsive design with CSS Grid and Flexbox
 
-- `GET /api/config` ⚙️: Mapbox token and app settings
-- `GET /api/methods` 🧠: Available similarity methods
-- `GET /api/health` 💚: System health check
+**State Management:**
 
-### Utility
+- React Context API for global application state
+- useState and useEffect hooks for component state
+- Custom hooks for API interactions and data fetching
 
-- `POST /api/cache/clear` 🧹: Clear similarity search cache
+**UI Components:**
 
----
+- Custom-built interface components
+- Dark/light theme support
+- Mobile-responsive design
+- Real-time loading states and error handling
 
-## 🎛️ Features
+### Backend (`backend/`)
 
-### Interactive Map 🗺️
+**API Framework:**
 
-- **Satellite imagery** powered by Mapbox
-- **Click tiles** to select and find similar areas
-- **City filtering** via search bar
-- **Zoom controls** and smooth navigation
+- FastAPI with automatic OpenAPI documentation
+- Pydantic models for request/response validation
+- CORS middleware for cross-origin requests
+- Async/await for non-blocking operations
 
-### UMAP Visualization 📊
+**Vector Database:**
 
-- **2D projection** of high-dimensional embeddings
-- **Continental coloring** for geographic context
-- **Interactive selection** synced with map
-- **Pan and zoom** with smooth animations
+- Qdrant for high-performance similarity search
+- Three collection types for different aggregation methods
+- Cosine similarity with configurable result limits
+- Batch processing for multiple similarity queries
 
-### Similarity Search 🔍
+## Key Features
 
-- **6 aggregation methods**: Mean, Median, Min, Max, Dominant Cluster, Global Contrastive
-- **Same-city filtering** toggle
-- **Pagination** for large result sets
-- **Satellite thumbnails** for each result
+### Similarity Search
 
-### Smart UI 🧠
+- **Click-based Search:** Click any map location to find similar areas
+- **Multiple Methods:** Three different aggregation approaches (mean, median, dominant_cluster)
+- **Real-time Results:** Sub-second similarity search across 40k+ locations
+- **Configurable Parameters:** Adjustable similarity thresholds and result counts
 
-- **Dark/light themes** with CSS variables
-- **Responsive design** for mobile/desktop
-- **Auto-complete search** for cities and countries
-- **Contextual help** panel with method explanations
+### Interactive Visualization
 
----
+- **Dual View:** Satellite map + UMAP embedding space
+- **Synchronized Selection:** Selections sync between map and UMAP views
+- **Zoom and Pan:** Smooth navigation across global dataset
+- **Result Highlighting:** Visual highlighting of similar locations
 
-## 🎨 Similarity Methods
+### Data Display
 
-| Method                    | Description               | Best For                |
-| ------------------------- | ------------------------- | ----------------------- |
-| **Mean** 📊               | Standard patch averaging  | General similarity      |
-| **Median** 📈             | Robust to outliers        | Consistent patterns     |
-| **Min** ⬇️                | Shared baseline features  | Common characteristics  |
-| **Max** ⬆️                | Distinctive features      | Unique landmarks        |
-| **Dominant Cluster** 🎯   | Most frequent patterns    | Recurring visual themes |
-| **Global Contrastive** 🌍 | Dataset-relative encoding | Distinctive vs average  |
+- **Location Metadata:** City, country, continent information
+- **Similarity Scores:** Quantitative similarity measurements
+- **Coordinate Information:** Latitude/longitude display
+- **Tile Boundaries:** Optional display of analysis tile boundaries
 
----
+## API Endpoints
 
-## 🎯 What This Does
+### Similarity Search
 
-The webapp enables users to:
+```
+POST /api/similarity
+{
+  "location_id": "string",
+  "method": "mean|median|min|max|dominant_cluster|global_contrastive",
+  "limit": 50
+}
+```
 
-1. **Explore** cities on an interactive satellite map 🛰️
-2. **Click** any urban area to analyze its visual patterns 🔍
-3. **Discover** visually similar places worldwide using AI 🤖
-4. **Compare** different similarity methods and see how they work 🔬
-5. **Visualize** the embedding space through UMAP projections 📊
+### Location Data
 
-Perfect for urban planners, researchers, or anyone curious about how cities look from space! 🌍✨
+```
+GET /api/locations          # All location metadata
+GET /api/umap-coordinates   # UMAP 2D coordinates
+GET /api/stats              # Dataset statistics
+```
+
+### Health Check
+
+```
+GET /api/health            # API status
+```
+
+## Setup Instructions
+
+### Frontend Setup
+
+```bash
+cd frontend/
+npm install
+npm start                  # Development server on localhost:3000
+```
+
+**Environment Configuration:**
+
+```bash
+# .env file
+REACT_APP_API_URL=http://localhost:8000
+REACT_APP_MAPBOX_TOKEN=your_mapbox_token
+```
+
+### Backend Setup
+
+```bash
+cd backend/
+pip install fastapi uvicorn qdrant-client pandas numpy
+python main.py            # Server on localhost:8000
+```
+
+**Environment Configuration:**
+
+```bash
+# .env file
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=optional_api_key
+CORS_ORIGINS=http://localhost:3000
+```
+
+## Development
+
+### Frontend Development
+
+```bash
+npm run start             # Development server with hot reload
+npm run build             # Production build
+npm run test              # Run test suite
+```
+
+### Backend Development
+
+```bash
+uvicorn main:app --reload # Development server with auto-reload
+uvicorn main:app --host 0.0.0.0 --port 8000  # Production server
+```
+
+## Deployment
+
+**Production Build:**
+
+```bash
+# Frontend
+npm run build
+# Serve static files with nginx or similar
+
+# Backend
+uvicorn main:app --host 0.0.0.0 --port 8000
+# Use gunicorn for production WSGI server
+```

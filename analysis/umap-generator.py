@@ -35,12 +35,12 @@ from typing import Dict, List, Optional, Tuple
 load_dotenv()
 
 # Configuration
-EMBEDDINGS_DIR = "/Users/janmagnuszewski/dev/terramind/embeddings/urban_embeddings_224_terramind_normalised"
-OUTPUT_DIR = "../backend/production_data"
-BACKUP_EXISTING = False  # Create backup of existing UMAP file
+EMBEDDINGS_DIR = "../../../terramind/embeddings/urban_embeddings_224_terramind_normalised"
+OUTPUT_DIR = "outputs"
+BACKUP_EXISTING = False
 
 # Dimension analysis results file
-DIMENSION_ANALYSIS_FILE = "./spatial_correlation_analysis/spatial_correlation_results.json"
+DIMENSION_ANALYSIS_FILE = "outputs/spatial_correlation_results.json"
 
 # UMAP Parameters
 # UMAP Parameters: {'n_components': 6, 'n_neighbors': 7, 'min_dist': 1, 'metric': 'cosine', 'random_state': 42, 'n_epochs': 200}
