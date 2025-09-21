@@ -45,7 +45,7 @@ Identifies embedding dimensions that encode geographic location rather than visu
 - Uses gradient-based cutoff detection
 - Generates statistical plots and dimension exclusion results, like this one:
 
-![Spatial Correlation Analysis](./res/spatial_correlation_analysis.png)
+![Spatial Correlation Analysis](./res/dimension_filtering_threshold.png)
 
 **Output:** `spatial_correlation_results.json` with excluded dimensions list
 
