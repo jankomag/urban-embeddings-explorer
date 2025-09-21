@@ -486,3 +486,36 @@
     font-size: 11px;
   }
 }
+
+/* Add this to your HelpPanel.css file */
+
+/* Help panel links styling for dark mode compatibility */
+.help-panel .help-link {
+  color: var(--accent-blue);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.help-panel .help-link:hover {
+  color: var(--accent-blue-hover);
+  text-decoration: underline;
+}
+
+.help-panel .help-link:visited {
+  color: var(--accent-blue);
+}
+
+/* Ensure the link styling works in both light and dark modes */
+.help-panel a.help-link {
+  color: var(--accent-blue) !important;
+}
+
+.help-panel a.help-link:hover {
+  color: var(--accent-blue-hover) !important;
+  text-decoration: underline;
+}
+
+.help-panel a.help-link:visited {
+  color: var(--accent-blue) !important;
+}
