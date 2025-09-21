@@ -122,6 +122,6 @@ embeddings/
 
 ## Data Quality
 
-**Spatial Bias Removal:** Excluded roughly 8% of dimensions identified as most representative of geographic location
-**Consistency:** Identical filtering applied across UMAP generation and vector database preparation
-**Validation:** Comprehensive logging and statistical analysis of filtering effectiveness
+- **Spatial Bias Removal:** Excluded roughly 8% of dimensions identified as most representative of geographic location
+- **Consistency:** Identical filtering applied across UMAP generation and vector database preparation
+- **Validation:** Comprehensive logging and statistical analysis of filtering effectiveness
