@@ -142,12 +142,13 @@ qdrant_client = None
 
 # Qdrant collection names
 COLLECTIONS = {
-    'mean': 'satellite_embeddings_mean_filtered_nonspatial',
-    'median': 'satellite_embeddings_median_filtered_nonspatial',
+    'mean': 'terramind_embeddings_mean',
+    'median': 'terramind_embeddings_median',
     # 'min': 'satellite_embeddings_min_filtered_nonspatial',
     # 'max': 'satellite_embeddings_max_filtered_nonspatial',
-    'dominant_cluster': 'satellite_embeddings_dominant_cluster_filtered_nonspatial',
-    # 'global_contrastive': 'satellite_embeddings_global_contrastive_filtered_nonspatial'
+    'dominant_cluster': 'terramind_embeddings_dominant_cluster',
+    'global_contrastive': 'terramind_embeddings_global_contrastive',
+    'attention_weighted': 'terramind_embeddings_attention_weighted'
 }
 
 class SimilarityCache:
@@ -571,6 +572,16 @@ async def get_similarity_methods():
             "name": "Dominant Cluster",
             "description": "Most frequent pattern",
             "collection": COLLECTIONS["dominant_cluster"]
+        },
+        "global_contrastive": {
+            "name": "Global Contrastive",
+            "description": "Unique minus mean",
+            "collection": COLLECTIONS["global_contrastive"]
+        },
+        "attention_weighted": {
+            "name": "Attention Weighted",
+            "description": "Unique attention",
+            "collection": COLLECTIONS["attention_weighted"]
         }
     }
     

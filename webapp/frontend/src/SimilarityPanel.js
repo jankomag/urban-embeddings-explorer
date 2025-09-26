@@ -62,6 +62,10 @@ function SimilarityPanel({
     'dominant_cluster': {
       name: "Dominant Cluster",
       description: "Unique characteristics"
+    },
+    'attention_weighted': {
+      name: "Attention Weighted",
+      description: "Unique attention"
     }
   });
   const [loadingMethods, setLoadingMethods] = useState(false);
@@ -86,16 +90,19 @@ function SimilarityPanel({
         const data = await response.json();
         
         const filteredMethods = {};
-        const availableKeys = ['mean', 'median', 'min', 'max', 'dominant_cluster'];
+        const availableKeys = ['mean', 'median', 'dominant_cluster', 'global_contrastive', 'attention_weighted'];
         
         for (const key of availableKeys) {
           if (data.available_methods[key]) {
             const shortNames = {
               'mean': { name: "Mean", description: "Standard aggregation" },
               'median': { name: "Median", description: "Robust to outliers" },
-              'min': { name: "Min", description: "Shared baseline features" },
-              'max': { name: "Max", description: "Distinctive features" },
-              'dominant_cluster': { name: "Dominant Cluster", description: "Unique characteristics" }
+              // 'min': { name: "Min", description: "Shared baseline features" },
+              // 'max': { name: "Max", description: "Distinctive features" },
+              'dominant_cluster': { name: "Dominant Cluster", description: "Unique characteristics" },
+              'global_contrastive': { name: "Global Contrastive", description: "Unique blahblah" },
+              'attention_weighted': { name: "Attention Weighted", description: "Unique attention" }
+
             };
             filteredMethods[key] = shortNames[key] || data.available_methods[key];
           }

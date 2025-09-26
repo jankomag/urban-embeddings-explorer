@@ -45,7 +45,7 @@ load_dotenv()
 
 # Configuration
 FORCE_REUPLOAD = False  # Set to True to perform full reupload with dimension filtering
-EMBEDDINGS_DIR = "/Users/janmagnuszewski/dev/terramind/embeddings/urban_embeddings_224_terramind_normalised"
+EMBEDDINGS_DIR = "../../../terramind/embeddings/urban_embeddings_224_terramind_normalised"
 OUTPUT_DIR = "./production_data"
 
 # Dimension analysis results file
@@ -147,12 +147,12 @@ class SimplifiedEmbeddingsUploader:
         
         # Collection names with six aggregation methods
         self.collections = {
-            'mean': 'satellite_embeddings_mean_filtered_nonspatial',
-            'median': 'satellite_embeddings_median_filtered_nonspatial',
-            'min': 'satellite_embeddings_min_filtered_nonspatial',
-            'max': 'satellite_embeddings_max_filtered_nonspatial',
-            'global_contrastive': 'satellite_embeddings_global_contrastive_filtered_nonspatial',
-            'dominant_cluster': 'satellite_embeddings_dominant_cluster_filtered_nonspatial'
+            'mean': 'terramind_embeddings_mean',
+            'median': 'terramind_embeddings_median',
+            'max': 'terrmaind_embeddings_max',
+            'global_contrastive': 'terramind_embeddings_global_contrastive',
+            'dominant_cluster': 'terramind_embeddings_dominant_cluster',
+            'attention_weighted': 'terramind_embeddings_attention_weighted'
         }
         
         # For computing dataset mean incrementally
@@ -304,15 +304,15 @@ class SimplifiedEmbeddingsUploader:
             # Standard aggregations (fast)
             aggregations['mean'] = np.mean(filtered_patches, axis=0)
             aggregations['median'] = np.median(filtered_patches, axis=0)
-            aggregations['min'] = np.min(filtered_patches, axis=0)
             aggregations['max'] = np.max(filtered_patches, axis=0)
             
             # Log after fast aggregations
             if tile_num and total_tiles and tile_num % 10 == 0:
-                logger.debug(f"{progress_prefix}Computed mean/median/min/max (filtered: {filtered_patches.shape})")
+                logger.debug(f"{progress_prefix}Computed mean/median/max (filtered: {filtered_patches.shape})")
             
-            # Dominant cluster aggregation (slow)
+            # Slower aggregations
             aggregations['dominant_cluster'] = self.compute_dominant_cluster_embedding(filtered_patches)
+            aggregations['attention_weighted'] = self.aggregate_attention_weighted(filtered_patches)  # NEW
             
             # Log completion for every 10th tile
             if tile_num and total_tiles and tile_num % 10 == 0:
@@ -328,11 +328,51 @@ class SimplifiedEmbeddingsUploader:
             return {
                 'mean': mean_embedding,
                 'median': mean_embedding,
-                'min': mean_embedding,
                 'max': mean_embedding,
-                'dominant_cluster': mean_embedding
+                'dominant_cluster': mean_embedding,
+                'attention_weighted': mean_embedding  # NEW
             }
-
+            
+    def aggregate_attention_weighted(self, filtered_patches: np.ndarray) -> np.ndarray:
+        """Self-attention weighted aggregation of patches."""
+        try:
+            n_patches = len(filtered_patches)
+            
+            if n_patches != 196:
+                logger.warning(f"Expected 196 patches, got {n_patches}. Using mean fallback.")
+                return np.mean(filtered_patches, axis=0)
+            
+            # Simple self-attention mechanism
+            # Q, K, V are all the same (self-attention)
+            attention_scores = np.dot(filtered_patches, filtered_patches.T)  # [196, 196]
+            
+            # Apply temperature scaling to prevent extreme attention weights
+            temperature = 0.1
+            attention_scores = attention_scores / temperature
+            
+            # Softmax normalization with numerical stability
+            attention_scores = attention_scores - np.max(attention_scores, axis=1, keepdims=True)
+            attention_weights = np.exp(attention_scores)
+            attention_weights = attention_weights / (np.sum(attention_weights, axis=1, keepdims=True) + 1e-8)
+            
+            # Aggregate using attention weights
+            # Take mean attention weight for each patch (how much other patches attend to it)
+            patch_importance = np.mean(attention_weights, axis=0)  # [196]
+            
+            # Weighted average of patches
+            weighted_embedding = np.sum(filtered_patches * patch_importance[:, np.newaxis], axis=0)
+            
+            # Normalize the result
+            weighted_embedding = weighted_embedding / (np.sum(patch_importance) + 1e-8)
+            
+            logger.debug(f"Attention weights range: [{np.min(patch_importance):.6f}, {np.max(patch_importance):.6f}]")
+            
+            return weighted_embedding
+            
+        except Exception as e:
+            logger.warning(f"Error in attention weighted aggregation, using mean fallback: {e}")
+            return np.mean(filtered_patches, axis=0)
+    
     def update_dataset_mean(self, mean_embedding: np.ndarray):
         """Update dataset mean incrementally."""
         if self.dataset_mean_accumulator is None:
@@ -552,10 +592,11 @@ class SimplifiedEmbeddingsUploader:
             method_emoji = {
                 'mean': '📊',
                 'median': '📈',
-                'min': '⬇️',
+                # 'min': '⬇️',
                 'max': '⬆️',
                 'global_contrastive': '🌍',
-                'dominant_cluster': '🎯'
+                'dominant_cluster': '🎯',
+                'attention_weighted': '🧠'
             }.get(method, '📦')
             
             logger.info(f"{method_emoji} Uploading to {method} collection ({method_count}/{len(methods_to_upload)})...")
@@ -641,7 +682,7 @@ class SimplifiedEmbeddingsUploader:
     def process_city_batch(self, files_batch: List[str]) -> Tuple[List[Dict], Dict[str, List[np.ndarray]]]:
         """Process a batch of city files with dimension filtering."""
         batch_metadata = []
-        batch_aggregations = {method: [] for method in ['mean', 'median', 'min', 'max', 'dominant_cluster']}
+        batch_aggregations = {method: [] for method in ['mean', 'median', 'max', 'dominant_cluster', 'attention_weighted']}
         
         tiles_with_exact_bounds = 0
         tiles_with_fallback_bounds = 0
@@ -938,7 +979,7 @@ class SimplifiedEmbeddingsUploader:
             'aggregation_methods': {
                 'mean': 'Standard mean aggregation of filtered patches',
                 'median': 'Median aggregation of filtered patches (robust to outliers)',
-                'min': 'Element-wise minimum of filtered patches',
+                # 'min': 'Element-wise minimum of filtered patches',
                 'max': 'Element-wise maximum of filtered patches',
                 'global_contrastive': 'Dataset mean subtracted from mean embeddings (filtered)',
                 'dominant_cluster': f'Average of patches in most frequent cluster (Elbow method, max k={MAX_CLUSTERS_TEST}, filtered)' if USE_ELBOW_METHOD else f'Average of patches in most frequent cluster (Fixed k={FALLBACK_CLUSTERS}, filtered)'
@@ -1068,21 +1109,21 @@ def main():
     
     excluded_dimensions = analysis_results['cutoff_results']['excluded_dimensions']
     
-    logger.info(f"🔍 Configuration:")
+    logger.info(f"📋 Configuration:")
     logger.info(f"   Embeddings directory: {EMBEDDINGS_DIR}")
     logger.info(f"   Output directory: {OUTPUT_DIR}")
     logger.info(f"   Force reupload: {FORCE_REUPLOAD}")
     logger.info(f"   Memory management: {CITY_BATCH_SIZE} cities per batch, {MAX_MEMORY_GB}GB limit")
     logger.info(f"   Dimension filtering: {len(excluded_dimensions)} dimensions excluded")
     
-    # Show the collection names that will be created
+    # Show the collection names that will be created (UPDATED)
     collections = {
-        'mean': 'satellite_embeddings_mean_filtered_nonspatial',
-        'median': 'satellite_embeddings_median_filtered_nonspatial',
-        'min': 'satellite_embeddings_min_filtered_nonspatial',
-        'max': 'satellite_embeddings_max_filtered_nonspatial',
-        'global_contrastive': 'satellite_embeddings_global_contrastive_filtered_nonspatial',
-        'dominant_cluster': 'satellite_embeddings_dominant_cluster_filtered_nonspatial'
+        'mean': 'terramind_embeddings_mean',
+        'median': 'terramind_embeddings_median',
+        'max': 'terrmaind_embeddings_max',
+        'global_contrastive': 'terramind_embeddings_global_contrastive',
+        'dominant_cluster': 'terramind_embeddings_dominant_cluster',
+        'attention_weighted': 'terramind_embeddings_attention_weighted'  # NEW
     }
     logger.info(f"📦 Filtered collections to create:")
     for method, collection_name in collections.items():
@@ -1098,19 +1139,20 @@ def main():
         uploader.run()
         logger.info("🎉 Simplified script completed successfully!")
         logger.info("🎯 Exact tile bounds have been extracted and included!")
-        logger.info("📊 Six aggregation methods have been computed and uploaded with dimension filtering!")
+        logger.info("📊 Seven aggregation methods have been computed and uploaded with dimension filtering!")  # UPDATED
         logger.info("🆕 Dominant cluster method captures most frequent visual patterns (filtered)!")
-        logger.info("🔍 City-discriminative dimensions have been filtered from all embeddings!")
+        logger.info("🧠 Attention-weighted method captures patch importance relationships (filtered)!")  # NEW
+        logger.info("📋 City-discriminative dimensions have been filtered from all embeddings!")
         logger.info("📈 Enhanced similarity search with reduced city bias!")
         logger.info("🗺️ UMAP coordinates computed from filtered Qdrant data!")
-        logger.info("🔍 Update your frontend and backend to use the new filtered collections!")
+        logger.info("📋 Update your frontend and backend to use the new filtered collections!")
         logger.info("💡 All similarity searches will now have reduced city bias!")
         logger.info("📊 Pre-computed dimension analysis used for maximum efficiency!")
+        
         return 0
+        
     except Exception as e:
-        logger.error(f"❌ Simplified script failed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"❌ Upload failed: {e}")
         return 1
 
 
