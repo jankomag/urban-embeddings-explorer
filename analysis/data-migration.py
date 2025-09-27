@@ -13,6 +13,7 @@ Usage:
 Configuration:
     - Reads excluded dimensions from: ./dimension_analysis_results.json
     - Uploads filtered embeddings with all 6 aggregation methods
+    - FORCE_REUPLOAD: Controls whether to delete/recreate all collections or skip existing ones
 """
 
 import os
@@ -120,48 +121,38 @@ def load_dimension_analysis_results(filepath: str) -> Optional[Dict]:
         return None
 
 class SimplifiedEmbeddingsUploader:
-    def __init__(self, excluded_dimensions: List[int]):
+    def __init__(self, excluded_dimensions: List[int], force_reupload: bool = False):
         """Initialize the simplified uploader with pre-computed excluded dimensions."""
-        # Qdrant connection
-        self.qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
-        self.qdrant_api_key = os.getenv('QDRANT_API_KEY')
+        self.excluded_dimensions = set(excluded_dimensions)
+        self.filtered_dimension_count = 768 - len(excluded_dimensions)  # Assuming 768 original dimensions
+        self.force_reupload = force_reupload
         
-        # Connect to Qdrant
-        try:
-            client_kwargs = {'url': self.qdrant_url, 'timeout': 120}
-            if self.qdrant_api_key and self.qdrant_api_key != 'your_api_key_if_needed':
-                client_kwargs['api_key'] = self.qdrant_api_key
-                
-            self.qdrant_client = QdrantClient(**client_kwargs)
-            logger.info(f"✅ Connected to Qdrant at {self.qdrant_url}")
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to Qdrant: {e}")
-            raise
+        # Initialize Qdrant client
+        qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+        qdrant_api_key = os.getenv("QDRANT_API_KEY")
         
-        # Create output directories
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        self.qdrant_client = QdrantClient(
+            url=qdrant_url,
+            api_key=qdrant_api_key
+        )
         
-        # Store excluded dimensions
-        self.excluded_dimensions = excluded_dimensions
-        self.filtered_dimension_count = 768 - len(excluded_dimensions)
-        
-        # Collection names with six aggregation methods
+        # Collection names
         self.collections = {
             'mean': 'terramind_embeddings_mean',
             'median': 'terramind_embeddings_median',
-            'max': 'terrmaind_embeddings_max',
+            'max': 'terramind_embeddings_max',
             'global_contrastive': 'terramind_embeddings_global_contrastive',
-            'dominant_cluster': 'terramind_embeddings_dominant_cluster',
-            'attention_weighted': 'terramind_embeddings_attention_weighted'
+            'dominant_cluster': 'terramind_embeddings_dominant_cluster'
         }
         
-        # For computing dataset mean incrementally
+        # For global contrastive method
         self.dataset_mean_accumulator = None
         self.total_tiles_processed = 0
         
-        logger.info(f"🔍 Dimension filtering configured:")
+        logger.info(f"🔧 Initialized uploader:")
+        logger.info(f"   Force reupload: {self.force_reupload}")
+        logger.info(f"   Filtered dimensions: {self.filtered_dimension_count}")
         logger.info(f"   Excluded dimensions: {len(self.excluded_dimensions)}")
-        logger.info(f"   Filtered vector size: {self.filtered_dimension_count}")
 
     def filter_embedding_dimensions(self, full_patches: np.ndarray) -> np.ndarray:
         """
@@ -186,7 +177,161 @@ class SimplifiedEmbeddingsUploader:
         
         return filtered_patches
 
-    def extract_exact_tile_bounds(self, row: pd.Series) -> Optional[List[List[float]]]:
+    def check_existing_collections(self) -> Dict[str, bool]:
+        """Check which collections already exist."""
+        try:
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [col.name for col in collections]
+            
+            collection_status = {}
+            for embed_type, collection_name in self.collections.items():
+                exists = collection_name in existing_names
+                collection_status[embed_type] = exists
+                
+            return collection_status
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking existing collections: {e}")
+            return {key: False for key in self.collections.keys()}
+
+    def get_collection_info(self, collection_name: str) -> Optional[Dict]:
+        """Get information about an existing collection."""
+        try:
+            info = self.qdrant_client.get_collection(collection_name)
+            return {
+                'name': collection_name,
+                'vectors_count': info.vectors_count,
+                'indexed_vectors_count': info.indexed_vectors_count,
+                'points_count': info.points_count,
+                'vector_size': info.config.params.vectors.size
+            }
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get info for collection {collection_name}: {e}")
+            return None
+
+    def delete_collection_if_exists(self, collection_name: str):
+        """Delete a specific collection if it exists."""
+        try:
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [col.name for col in collections]
+            
+            if collection_name in existing_names:
+                logger.info(f"🗑️ Deleting existing collection: {collection_name}")
+                self.qdrant_client.delete_collection(collection_name)
+                logger.info(f"✅ Deleted {collection_name}")
+                time.sleep(1)  # Brief pause
+            else:
+                logger.info(f"ℹ️ Collection {collection_name} does not exist, skipping deletion")
+                
+        except Exception as e:
+            logger.error(f"❌ Error deleting collection {collection_name}: {e}")
+            raise
+
+    def delete_all_collections(self):
+        """Delete all collections if they exist."""
+        logger.info("🗑️ Deleting all filtered collections...")
+        
+        try:
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [col.name for col in collections]
+            
+            for embed_type, collection_name in self.collections.items():
+                if collection_name in existing_names:
+                    logger.info(f"🗑️ Deleting {collection_name}")
+                    self.qdrant_client.delete_collection(collection_name)
+                    logger.info(f"✅ Deleted {collection_name}")
+            
+            time.sleep(2)
+            logger.info("✅ All filtered collections deleted")
+            
+        except Exception as e:
+            logger.error(f"❌ Error deleting collections: {e}")
+            raise
+
+    def create_collection(self, embed_type: str, collection_name: str):
+        """Create a single collection."""
+        try:
+            logger.info(f"📦 Creating {collection_name} (vector size: {self.filtered_dimension_count})")
+            
+            self.qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=self.filtered_dimension_count,
+                    distance=Distance.COSINE,
+                    on_disk=True
+                ),
+                hnsw_config=models.HnswConfigDiff(
+                    m=16,
+                    ef_construct=100
+                )
+            )
+            
+            logger.info(f"✅ Created {collection_name}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create {collection_name}: {e}")
+            raise
+
+    def create_collections(self):
+        """Create fresh collections with filtered vector size."""
+        logger.info("📦 Creating filtered collections...")
+        
+        for embed_type, collection_name in self.collections.items():
+            self.create_collection(embed_type, collection_name)
+        
+        logger.info("✅ All filtered collections created")
+
+    def manage_collections(self):
+        """Manage collections based on force_reupload setting."""
+        logger.info("🔄 PHASE 1: Collection Management")
+        
+        if self.force_reupload:
+            logger.info("🔥 Force reupload enabled - deleting and recreating ALL collections")
+            self.delete_all_collections()
+            self.create_collections()
+        else:
+            logger.info("🔍 Checking existing collections...")
+            existing_collections = self.check_existing_collections()
+            
+            collections_to_create = []
+            collections_to_skip = []
+            
+            for embed_type, collection_name in self.collections.items():
+                exists = existing_collections.get(embed_type, False)
+                
+                if exists:
+                    # Get collection info
+                    info = self.get_collection_info(collection_name)
+                    if info:
+                        logger.info(f"ℹ️ Collection {collection_name} exists with {info['points_count']} points, vector size {info['vector_size']}")
+                        
+                        # Check if vector size matches our filtered dimension count
+                        if info['vector_size'] != self.filtered_dimension_count:
+                            logger.warning(f"⚠️ Vector size mismatch for {collection_name}: {info['vector_size']} vs expected {self.filtered_dimension_count}")
+                            logger.info(f"🔄 Will recreate {collection_name} with correct vector size")
+                            self.delete_collection_if_exists(collection_name)
+                            collections_to_create.append((embed_type, collection_name))
+                        else:
+                            collections_to_skip.append((embed_type, collection_name))
+                    else:
+                        collections_to_create.append((embed_type, collection_name))
+                else:
+                    collections_to_create.append((embed_type, collection_name))
+            
+            # Create missing collections
+            if collections_to_create:
+                logger.info(f"📦 Creating {len(collections_to_create)} missing collections...")
+                for embed_type, collection_name in collections_to_create:
+                    self.create_collection(embed_type, collection_name)
+                logger.info("✅ Missing collections created")
+            
+            # Log skipped collections
+            if collections_to_skip:
+                logger.info(f"⏭️ Skipping {len(collections_to_skip)} existing collections:")
+                for embed_type, collection_name in collections_to_skip:
+                    logger.info(f"   - {embed_type}: {collection_name}")
+
+    def extract_exact_tile_bounds(self, row: pd.Series):
         """Extract exact tile boundary coordinates from GeoParquet geometry."""
         try:
             # Method 1: Check if we have explicit bounds columns
@@ -310,9 +455,8 @@ class SimplifiedEmbeddingsUploader:
             if tile_num and total_tiles and tile_num % 10 == 0:
                 logger.debug(f"{progress_prefix}Computed mean/median/max (filtered: {filtered_patches.shape})")
             
-            # Slower aggregations
+            # Dominant cluster aggregation (slow)
             aggregations['dominant_cluster'] = self.compute_dominant_cluster_embedding(filtered_patches)
-            aggregations['attention_weighted'] = self.aggregate_attention_weighted(filtered_patches)  # NEW
             
             # Log completion for every 10th tile
             if tile_num and total_tiles and tile_num % 10 == 0:
@@ -329,50 +473,9 @@ class SimplifiedEmbeddingsUploader:
                 'mean': mean_embedding,
                 'median': mean_embedding,
                 'max': mean_embedding,
-                'dominant_cluster': mean_embedding,
-                'attention_weighted': mean_embedding  # NEW
+                'dominant_cluster': mean_embedding
             }
-            
-    def aggregate_attention_weighted(self, filtered_patches: np.ndarray) -> np.ndarray:
-        """Self-attention weighted aggregation of patches."""
-        try:
-            n_patches = len(filtered_patches)
-            
-            if n_patches != 196:
-                logger.warning(f"Expected 196 patches, got {n_patches}. Using mean fallback.")
-                return np.mean(filtered_patches, axis=0)
-            
-            # Simple self-attention mechanism
-            # Q, K, V are all the same (self-attention)
-            attention_scores = np.dot(filtered_patches, filtered_patches.T)  # [196, 196]
-            
-            # Apply temperature scaling to prevent extreme attention weights
-            temperature = 0.1
-            attention_scores = attention_scores / temperature
-            
-            # Softmax normalization with numerical stability
-            attention_scores = attention_scores - np.max(attention_scores, axis=1, keepdims=True)
-            attention_weights = np.exp(attention_scores)
-            attention_weights = attention_weights / (np.sum(attention_weights, axis=1, keepdims=True) + 1e-8)
-            
-            # Aggregate using attention weights
-            # Take mean attention weight for each patch (how much other patches attend to it)
-            patch_importance = np.mean(attention_weights, axis=0)  # [196]
-            
-            # Weighted average of patches
-            weighted_embedding = np.sum(filtered_patches * patch_importance[:, np.newaxis], axis=0)
-            
-            # Normalize the result
-            weighted_embedding = weighted_embedding / (np.sum(patch_importance) + 1e-8)
-            
-            logger.debug(f"Attention weights range: [{np.min(patch_importance):.6f}, {np.max(patch_importance):.6f}]")
-            
-            return weighted_embedding
-            
-        except Exception as e:
-            logger.warning(f"Error in attention weighted aggregation, using mean fallback: {e}")
-            return np.mean(filtered_patches, axis=0)
-    
+
     def update_dataset_mean(self, mean_embedding: np.ndarray):
         """Update dataset mean incrementally."""
         if self.dataset_mean_accumulator is None:
@@ -425,51 +528,34 @@ class SimplifiedEmbeddingsUploader:
                 return None, None
             
             # Generate reproducible tile ID
-            tile_id = row.get('tile_id')
+            tile_id = row.get('tile_id') or row.get('id')
+            city = row.get('city') or row.get('city_name', 'Unknown')
+            country = row.get('country') or row.get('country_name', 'Unknown')
+            continent = row.get('continent') or row.get('continent_name', 'Unknown')
+            date = row.get('date') or row.get('capture_date')
             
-            if tile_id is None or pd.isna(tile_id):
-                lon_str = f"{lon_val:.6f}"
-                lat_str = f"{lat_val:.6f}"
-                tile_id_str = f"tile_{lon_str}_{lat_str}"
-            else:
-                tile_id_str = str(tile_id).strip()
+            if tile_id is None:
+                tile_id = f"{city}_{country}_{lon_val:.6f}_{lat_val:.6f}"
             
-            import hashlib
-            hash_object = hashlib.sha256(tile_id_str.encode('utf-8'))
-            hash_hex = hash_object.hexdigest()
-            unique_id = int(hash_hex[:8], 16) % (2**31 - 1)
+            tile_id_str = str(tile_id)
+            date_str = str(date) if date is not None else None
             
-            # Get required fields
-            city = row.get('city')
-            country = row.get('country')
-            continent = row.get('continent', 'Unknown')
+            # Create unique ID for Qdrant
+            unique_id = hash(f"{tile_id_str}_{city}_{country}_{lon_val}_{lat_val}") % (2**63 - 1)
+            if unique_id < 0:
+                unique_id = abs(unique_id)
             
-            def is_valid_string_field(val):
-                if val is None:
-                    return False
-                try:
-                    if pd.isna(val):
-                        return False
-                except (ValueError, TypeError):
-                    pass
-                str_val = str(val).strip().lower()
-                return str_val and str_val not in ['unknown', 'nan', 'none', '']
+            unique_id = int(unique_id) if unique_id != 0 else 1
             
-            if not is_valid_string_field(city) or not is_valid_string_field(country):
-                return None, None
-            
-            if not is_valid_string_field(continent):
-                continent = 'Unknown'
-            
-            # Get date
-            date_str = None
-            acq_date = row.get('acquisition_date')
-            if acq_date is not None:
-                try:
-                    if not pd.isna(acq_date):
-                        date_str = str(acq_date)
-                except (ValueError, TypeError):
-                    date_str = str(acq_date) if str(acq_date) != 'nan' else None
+            # Generate fallback bounds if needed
+            tile_size_deg = 0.01  # Default tile size
+            fallback_bounds = [
+                [lon_val - tile_size_deg/2, lat_val + tile_size_deg/2],
+                [lon_val + tile_size_deg/2, lat_val + tile_size_deg/2],
+                [lon_val + tile_size_deg/2, lat_val - tile_size_deg/2],
+                [lon_val - tile_size_deg/2, lat_val - tile_size_deg/2],
+                [lon_val - tile_size_deg/2, lat_val + tile_size_deg/2]
+            ] if row.get('geometry') is None else None
             
             # Extract exact tile bounds
             exact_tile_bounds = self.extract_exact_tile_bounds(row)
@@ -510,56 +596,6 @@ class SimplifiedEmbeddingsUploader:
             logger.warning(f"Error processing tile: {e}")
             return None, None
 
-    def delete_all_collections(self):
-        """Delete all collections if they exist."""
-        logger.info("🗑️ Deleting all filtered collections...")
-        
-        try:
-            collections = self.qdrant_client.get_collections().collections
-            existing_names = [col.name for col in collections]
-            
-            for embed_type, collection_name in self.collections.items():
-                if collection_name in existing_names:
-                    logger.info(f"🗑️ Deleting {collection_name}")
-                    self.qdrant_client.delete_collection(collection_name)
-                    logger.info(f"✅ Deleted {collection_name}")
-            
-            time.sleep(2)
-            logger.info("✅ All filtered collections deleted")
-            
-        except Exception as e:
-            logger.error(f"❌ Error deleting collections: {e}")
-            raise
-
-    def create_collections(self):
-        """Create fresh collections with filtered vector size."""
-        logger.info("📦 Creating filtered collections...")
-        
-        for embed_type, collection_name in self.collections.items():
-            try:
-                logger.info(f"📦 Creating {collection_name} (vector size: {self.filtered_dimension_count})")
-                
-                self.qdrant_client.create_collection(
-                    collection_name=collection_name,
-                    vectors_config=VectorParams(
-                        size=self.filtered_dimension_count,
-                        distance=Distance.COSINE,
-                        on_disk=True
-                    ),
-                    hnsw_config=models.HnswConfigDiff(
-                        m=16,
-                        ef_construct=100
-                    )
-                )
-                
-                logger.info(f"✅ Created {collection_name}")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to create {collection_name}: {e}")
-                raise
-        
-        logger.info("✅ All filtered collections created")
-
     def upload_batch_to_qdrant(self, batch_metadata: List[Dict], batch_aggregations: Dict[str, np.ndarray]):
         """Upload a batch to Qdrant collections with detailed progress tracking."""
         if not batch_metadata:
@@ -592,11 +628,9 @@ class SimplifiedEmbeddingsUploader:
             method_emoji = {
                 'mean': '📊',
                 'median': '📈',
-                # 'min': '⬇️',
                 'max': '⬆️',
                 'global_contrastive': '🌍',
-                'dominant_cluster': '🎯',
-                'attention_weighted': '🧠'
+                'dominant_cluster': '🎯'
             }.get(method, '📦')
             
             logger.info(f"{method_emoji} Uploading to {method} collection ({method_count}/{len(methods_to_upload)})...")
@@ -682,43 +716,25 @@ class SimplifiedEmbeddingsUploader:
     def process_city_batch(self, files_batch: List[str]) -> Tuple[List[Dict], Dict[str, List[np.ndarray]]]:
         """Process a batch of city files with dimension filtering."""
         batch_metadata = []
-        batch_aggregations = {method: [] for method in ['mean', 'median', 'max', 'dominant_cluster', 'attention_weighted']}
+        batch_aggregations = {method: [] for method in self.collections.keys()}
         
+        cities_in_batch = []
         tiles_with_exact_bounds = 0
         tiles_with_fallback_bounds = 0
-        cities_in_batch = []
         
-        logger.info(f"📋 Processing batch of {len(files_batch)} cities...")
-        
-        for file_idx, file_path in enumerate(files_batch, 1):
+        for file_path in files_batch:
             try:
-                file_name = os.path.basename(file_path)
-                logger.info(f"🏙️ [{file_idx}/{len(files_batch)}] Loading {file_name}...")
+                city_name = os.path.splitext(os.path.basename(file_path))[0]
+                cities_in_batch.append(city_name)
+                
+                logger.info(f"🏙️ Processing {city_name}...")
+                
+                # Load GeoParquet file
                 gdf = gpd.read_parquet(file_path)
                 
                 if len(gdf) == 0:
                     logger.warning(f"⚠️ Empty file: {file_path}")
                     continue
-                
-                # Get city info from first row
-                first_row = gdf.iloc[0]
-                city_name = first_row.get('city', '').strip()
-                country_name = first_row.get('country', '').strip()
-                
-                if not city_name or not country_name:
-                    logger.warning(f"⚠️ Missing city/country info in {file_path}")
-                    del gdf
-                    continue
-                
-                city_key = f"{city_name}, {country_name}"
-                cities_in_batch.append(city_key)
-                
-                logger.info(f"🏙️ Processing {city_key} - {len(gdf)} tiles (filtered dims: {self.filtered_dimension_count})")
-                
-                # Convert categorical columns
-                for col in gdf.columns:
-                    if gdf[col].dtype.name == 'category':
-                        gdf[col] = gdf[col].astype(str)
                 
                 city_tile_count = 0
                 city_exact_bounds = 0
@@ -761,9 +777,9 @@ class SimplifiedEmbeddingsUploader:
                 
                 if city_tile_count > 0:
                     bounds_info = f"({city_exact_bounds} exact bounds)" if city_exact_bounds > 0 else "(fallback bounds)"
-                    logger.info(f"✅ {city_key}: {city_tile_count} tiles processed {bounds_info} [filtered: {self.filtered_dimension_count} dims]")
+                    logger.info(f"✅ {city_name}: {city_tile_count} tiles processed {bounds_info} [filtered: {self.filtered_dimension_count} dims]")
                 else:
-                    logger.warning(f"⚠️ {city_key}: No valid tiles found")
+                    logger.warning(f"⚠️ {city_name}: No valid tiles found")
                 
                 # Clean up the GeoDataFrame
                 del gdf
@@ -855,86 +871,88 @@ class SimplifiedEmbeddingsUploader:
 
     def compute_umap_for_all_data(self, metadata_list: List[Dict]) -> Dict:
         """Compute UMAP coordinates using filtered mean embeddings from Qdrant."""
-        logger.info("🗺️ Computing UMAP coordinates from filtered Qdrant mean embeddings...")
-        
         try:
+            logger.info(f"🗺️ Computing UMAP from filtered embeddings in Qdrant...")
+            
+            # Get all point IDs
+            point_ids = [metadata['id'] for metadata in metadata_list]
+            
+            # Retrieve embeddings from mean collection
             collection_name = self.collections['mean']
             
-            # Get all points from mean collection
-            all_points = []
-            offset = None
+            logger.info(f"📥 Retrieving {len(point_ids)} embeddings from {collection_name}...")
             
-            while True:
-                points, next_offset = self.qdrant_client.scroll(
+            # Retrieve points in batches
+            batch_size = 1000
+            all_embeddings = []
+            valid_metadata = []
+            
+            for i in range(0, len(point_ids), batch_size):
+                batch_ids = point_ids[i:i + batch_size]
+                points = self.qdrant_client.retrieve(
                     collection_name=collection_name,
-                    limit=1000,
-                    offset=offset,
-                    with_vectors=True,
-                    with_payload=False
+                    ids=batch_ids,
+                    with_vectors=True
                 )
                 
-                all_points.extend(points)
-                
-                if next_offset is None:
-                    break
-                offset = next_offset
+                for point in points:
+                    if point.vector is not None:
+                        all_embeddings.append(point.vector)
+                        # Find corresponding metadata
+                        for metadata in metadata_list:
+                            if metadata['id'] == point.id:
+                                valid_metadata.append(metadata)
+                                break
             
-            # Extract embeddings and IDs
-            embeddings = np.array([point.vector for point in all_points])
-            point_ids = [point.id for point in all_points]
+            if len(all_embeddings) == 0:
+                raise ValueError("No embeddings retrieved from Qdrant")
             
-            logger.info(f"🗺️ Loaded {len(embeddings)} filtered embeddings for UMAP (dimension: {embeddings.shape[1]})")
+            embeddings_array = np.array(all_embeddings)
+            logger.info(f"✅ Retrieved {len(embeddings_array)} embeddings with shape {embeddings_array.shape}")
             
             # Compute UMAP
-            n_samples = len(embeddings)
-            n_neighbors = min(50, max(5, n_samples // 100))
-            
+            logger.info("🔄 Computing UMAP coordinates...")
             reducer = umap.UMAP(
+                n_neighbors=15,
+                min_dist=0.1,
                 n_components=2,
-                n_neighbors=n_neighbors,
-                min_dist=0.3,
                 metric='cosine',
                 random_state=42
             )
             
-            umap_coords = reducer.fit_transform(embeddings)
+            umap_coords = reducer.fit_transform(embeddings_array)
             
-            # Match coordinates with metadata
-            id_to_metadata = {m['id']: m for m in metadata_list}
-            
+            # Create UMAP points with metadata
             umap_points = []
-            for i, point_id in enumerate(point_ids):
-                if point_id in id_to_metadata:
-                    metadata = id_to_metadata[point_id]
-                    umap_point = {
-                        'location_id': point_id,
-                        'x': float(umap_coords[i][0]),
-                        'y': float(umap_coords[i][1]),
-                        'city': metadata['city'],
-                        'country': metadata['country'],
-                        'continent': metadata['continent'],
-                        'longitude': metadata['longitude'],
-                        'latitude': metadata['latitude'],
-                        'date': metadata['date'],
-                        'tile_bounds': metadata.get('tile_bounds'),
-                        'has_exact_bounds': metadata.get('has_exact_bounds', False)
-                    }
-                    umap_points.append(umap_point)
+            for i, (metadata, coords) in enumerate(zip(valid_metadata, umap_coords)):
+                umap_point = {
+                    'location_id': metadata['id'],
+                    'x': float(coords[0]),
+                    'y': float(coords[1]),
+                    'city': metadata['city'],
+                    'country': metadata['country'],
+                    'continent': metadata['continent'],
+                    'longitude': metadata['longitude'],
+                    'latitude': metadata['latitude'],
+                    'date': metadata['date'],
+                    'bounds': metadata.get('tile_bounds')
+                }
+                umap_points.append(umap_point)
             
             umap_data = {
                 'umap_points': umap_points,
                 'total_points': len(umap_points),
                 'bounds_statistics': {
-                    'tiles_with_exact_bounds': sum(1 for m in metadata_list if m.get('has_exact_bounds', False)),
-                    'tiles_with_fallback_bounds': sum(1 for m in metadata_list if not m.get('has_exact_bounds', False)),
-                    'exact_bounds_percentage': sum(1 for m in metadata_list if m.get('has_exact_bounds', False)) / len(metadata_list) * 100
+                    'tiles_with_exact_bounds': sum(1 for m in valid_metadata if m.get('has_exact_bounds', False)),
+                    'tiles_with_fallback_bounds': sum(1 for m in valid_metadata if not m.get('has_exact_bounds', False)),
+                    'exact_bounds_percentage': sum(1 for m in valid_metadata if m.get('has_exact_bounds', False)) / len(valid_metadata) * 100
                 },
                 'dimension_info': {
                     'original_dimensions': 768,
                     'filtered_dimensions': self.filtered_dimension_count,
                     'excluded_dimensions_count': len(self.excluded_dimensions),
                     'filtering_applied': True,
-                    'excluded_dimensions': self.excluded_dimensions
+                    'excluded_dimensions': list(self.excluded_dimensions)
                 }
             }
             
@@ -959,14 +977,14 @@ class SimplifiedEmbeddingsUploader:
             'dimension_filtering': {
                 'applied': True,
                 'excluded_dimensions_count': len(self.excluded_dimensions),
-                'excluded_dimensions': self.excluded_dimensions,
+                'excluded_dimensions': list(self.excluded_dimensions),
                 'exclusion_percentage': (len(self.excluded_dimensions) / 768 * 100),
                 'analysis_results': analysis_results,
                 'filtering_method': 'pre_computed_from_json'
             },
             'dataset_mean': self.dataset_mean_accumulator.tolist() if self.dataset_mean_accumulator is not None else None,
             'collections': self.collections,
-            'force_reupload': FORCE_REUPLOAD,
+            'force_reupload': self.force_reupload,
             'timestamp': time.time(),
             'clustering_parameters': {
                 'use_elbow_method': USE_ELBOW_METHOD,
@@ -979,7 +997,6 @@ class SimplifiedEmbeddingsUploader:
             'aggregation_methods': {
                 'mean': 'Standard mean aggregation of filtered patches',
                 'median': 'Median aggregation of filtered patches (robust to outliers)',
-                # 'min': 'Element-wise minimum of filtered patches',
                 'max': 'Element-wise maximum of filtered patches',
                 'global_contrastive': 'Dataset mean subtracted from mean embeddings (filtered)',
                 'dominant_cluster': f'Average of patches in most frequent cluster (Elbow method, max k={MAX_CLUSTERS_TEST}, filtered)' if USE_ELBOW_METHOD else f'Average of patches in most frequent cluster (Fixed k={FALLBACK_CLUSTERS}, filtered)'
@@ -996,6 +1013,9 @@ class SimplifiedEmbeddingsUploader:
             }
         }
         
+        # Ensure output directory exists
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
         # Save enhanced files (with gzip compression)
         files_to_save = [
             ('locations_metadata.json', metadata_list),
@@ -1010,36 +1030,18 @@ class SimplifiedEmbeddingsUploader:
                 json.dump(data, f, indent=2)
             logger.info(f"📄 Saved {filename}")
             
-            # Save compressed version for large files
-            if filename in ['locations_metadata.json', 'umap_coordinates.json']:
-                gzip_filepath = os.path.join(OUTPUT_DIR, f"{filename}.gz")
-                with gzip.open(gzip_filepath, 'wt') as f:
-                    json.dump(data, f, indent=2)
-                logger.info(f"🗜️ Saved compressed {filename}.gz")
+            # Save gzipped version
+            gzipped_filepath = f"{filepath}.gz"
+            with gzip.open(gzipped_filepath, 'wt') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"🗜️ Saved compressed {filename}.gz")
         
-        # Log dimension filtering statistics
-        logger.info(f"🔍 Dimension Filtering Statistics:")
-        logger.info(f"   Original dimensions: 768")
-        logger.info(f"   Excluded dimensions: {len(self.excluded_dimensions)}")
-        logger.info(f"   Remaining dimensions: {self.filtered_dimension_count}")
-        logger.info(f"   Exclusion percentage: {len(self.excluded_dimensions)/768*100:.1f}%")
-        
-        # Log bounds statistics
-        bounds_stats = umap_data['bounds_statistics']
-        logger.info(f"🎯 Tile Bounds Statistics:")
-        logger.info(f"   Exact bounds: {bounds_stats['tiles_with_exact_bounds']}")
-        logger.info(f"   Fallback bounds: {bounds_stats['tiles_with_fallback_bounds']}")
-        logger.info(f"   Coverage: {bounds_stats['exact_bounds_percentage']:.1f}%")
-        
-        # Log aggregation methods
-        logger.info(f"📊 Aggregation Methods (all with dimension filtering):")
-        for method, description in dataset_stats['aggregation_methods'].items():
-            logger.info(f"   {method}: {description}")
-        
-        logger.info(f"💾 Enhanced filtered data saved to {OUTPUT_DIR}")
+        logger.info(f"💾 Enhanced data saved to {OUTPUT_DIR}")
+        logger.info(f"📍 Enhanced similarity search with reduced city bias!")
+        logger.info(f"📈 UMAP visualization computed from filtered embeddings!")
 
     def run(self):
-        """Main execution method using pre-computed dimension analysis."""
+        """Main execution method."""
         start_time = time.time()
         
         logger.info(f"🛰️ Simplified Memory-Efficient Embeddings Uploader - Using Pre-computed Analysis")
@@ -1049,27 +1051,52 @@ class SimplifiedEmbeddingsUploader:
         logger.info(f"⚠️ Memory limit: {MAX_MEMORY_GB} GB")
         logger.info(f"📁 Embeddings directory: {EMBEDDINGS_DIR}")
         logger.info(f"📁 Output directory: {OUTPUT_DIR}")
-        logger.info(f"🔍 Using pre-computed dimension analysis from: {DIMENSION_ANALYSIS_FILE}")
+        logger.info(f"📄 Using pre-computed dimension analysis from: {DIMENSION_ANALYSIS_FILE}")
+        logger.info(f"🔄 Force reupload: {self.force_reupload}")
         
         initial_memory = get_memory_usage()
         logger.info(f"🧠 Initial memory usage: {initial_memory:.2f} GB")
         
-        logger.info("🔄 SIMPLIFIED MODE: Using pre-computed dimension analysis + exact bounds + six aggregation methods")
+        logger.info("📄 SIMPLIFIED MODE: Using pre-computed dimension analysis + exact bounds + aggregation methods")
         
-        # Phase 1: Delete and recreate collections
-        logger.info("🔄 PHASE 1: Collection Management")
-        self.delete_all_collections()
-        self.create_collections()
+        # Phase 1: Manage collections based on force_reupload setting
+        self.manage_collections()
         
         # Phase 2: Process all cities in memory-efficient batches
-        logger.info("🔄 PHASE 2: Data Processing and Upload with Filtering")
-        metadata_list, tiles_with_exact_bounds, tiles_with_fallback_bounds = self.process_all_cities_in_batches()
+        # Only process if we have collections to upload to or if force_reupload is True
+        existing_collections = self.check_existing_collections()
+        collections_with_data = []
         
-        if len(metadata_list) > 0:
-            # Phase 3: Save enhanced data and compute UMAP
-            logger.info("🔄 PHASE 3: UMAP Computation and Data Export")
-            analysis_results = load_dimension_analysis_results(DIMENSION_ANALYSIS_FILE)
-            self.save_enhanced_data(metadata_list, analysis_results)
+        if not self.force_reupload:
+            # Check which collections have data
+            for embed_type, collection_name in self.collections.items():
+                if existing_collections.get(embed_type, False):
+                    info = self.get_collection_info(collection_name)
+                    if info and info['points_count'] > 0:
+                        collections_with_data.append((embed_type, collection_name))
+        
+        if self.force_reupload or len(collections_with_data) < len(self.collections):
+            logger.info("🔄 PHASE 2: Data Processing and Upload with Filtering")
+            
+            if not self.force_reupload and collections_with_data:
+                logger.info(f"ℹ️ Found {len(collections_with_data)} collections with existing data:")
+                for embed_type, collection_name in collections_with_data:
+                    info = self.get_collection_info(collection_name)
+                    logger.info(f"   - {embed_type}: {collection_name} ({info['points_count']} points)")
+                logger.info(f"📤 Will only upload to {len(self.collections) - len(collections_with_data)} empty collections")
+            
+            metadata_list, tiles_with_exact_bounds, tiles_with_fallback_bounds = self.process_all_cities_in_batches()
+            
+            if len(metadata_list) > 0:
+                # Phase 3: Save enhanced data and compute UMAP
+                logger.info("🔄 PHASE 3: UMAP Computation and Data Export")
+                analysis_results = load_dimension_analysis_results(DIMENSION_ANALYSIS_FILE)
+                self.save_enhanced_data(metadata_list, analysis_results)
+        else:
+            logger.info("⏭️ PHASE 2: Skipping data processing - all collections have existing data")
+            logger.info("ℹ️ Use FORCE_REUPLOAD=True to reprocess and reupload all data")
+            tiles_with_exact_bounds = 0
+            tiles_with_fallback_bounds = 0
         
         # Final summary
         duration = (time.time() - start_time) / 60
@@ -1084,15 +1111,13 @@ class SimplifiedEmbeddingsUploader:
             logger.info(f"🎯 Tiles with exact bounds: {tiles_with_exact_bounds}")
             logger.info(f"📍 Exact bounds coverage: {tiles_with_exact_bounds/(tiles_with_exact_bounds + tiles_with_fallback_bounds)*100:.1f}%")
         
-        logger.info(f"🔍 Dimension filtering applied:")
+        logger.info(f"📍 Dimension filtering applied:")
         logger.info(f"   ❌ Excluded {len(self.excluded_dimensions)} city-discriminative dimensions")
         logger.info(f"   ✅ Used {self.filtered_dimension_count} dimensions for similarity")
         logger.info(f"   📊 Exclusion rate: {len(self.excluded_dimensions)/768*100:.1f}%")
         
-        logger.info(f"📊 Six filtered aggregation methods available: {', '.join(self.collections.keys())}")
+        logger.info(f"📊 Filtered aggregation methods available: {', '.join(self.collections.keys())}")
         logger.info(f"🆕 All methods use pre-computed dimension filtering!")
-        logger.info(f"🔍 Enhanced similarity search with reduced city bias!")
-        logger.info(f"📈 UMAP visualization computed from filtered embeddings!")
 
 
 def main():
@@ -1109,23 +1134,22 @@ def main():
     
     excluded_dimensions = analysis_results['cutoff_results']['excluded_dimensions']
     
-    logger.info(f"📋 Configuration:")
+    logger.info(f"📍 Configuration:")
     logger.info(f"   Embeddings directory: {EMBEDDINGS_DIR}")
     logger.info(f"   Output directory: {OUTPUT_DIR}")
     logger.info(f"   Force reupload: {FORCE_REUPLOAD}")
     logger.info(f"   Memory management: {CITY_BATCH_SIZE} cities per batch, {MAX_MEMORY_GB}GB limit")
     logger.info(f"   Dimension filtering: {len(excluded_dimensions)} dimensions excluded")
     
-    # Show the collection names that will be created (UPDATED)
+    # Show the collection names that will be created
     collections = {
         'mean': 'terramind_embeddings_mean',
         'median': 'terramind_embeddings_median',
-        'max': 'terrmaind_embeddings_max',
+        'max': 'terramind_embeddings_max',
         'global_contrastive': 'terramind_embeddings_global_contrastive',
-        'dominant_cluster': 'terramind_embeddings_dominant_cluster',
-        'attention_weighted': 'terramind_embeddings_attention_weighted'  # NEW
+        'dominant_cluster': 'terramind_embeddings_dominant_cluster'
     }
-    logger.info(f"📦 Filtered collections to create:")
+    logger.info(f"📦 Filtered collections to manage:")
     for method, collection_name in collections.items():
         logger.info(f"   - {method}: {collection_name}")
     
@@ -1133,26 +1157,25 @@ def main():
         logger.error(f"❌ Embeddings directory not found: {EMBEDDINGS_DIR}")
         return 1
     
-    uploader = SimplifiedEmbeddingsUploader(excluded_dimensions)
+    uploader = SimplifiedEmbeddingsUploader(excluded_dimensions, force_reupload=FORCE_REUPLOAD)
     
     try:
         uploader.run()
         logger.info("🎉 Simplified script completed successfully!")
         logger.info("🎯 Exact tile bounds have been extracted and included!")
-        logger.info("📊 Seven aggregation methods have been computed and uploaded with dimension filtering!")  # UPDATED
+        logger.info("📊 Aggregation methods have been computed and uploaded with dimension filtering!")
         logger.info("🆕 Dominant cluster method captures most frequent visual patterns (filtered)!")
-        logger.info("🧠 Attention-weighted method captures patch importance relationships (filtered)!")  # NEW
-        logger.info("📋 City-discriminative dimensions have been filtered from all embeddings!")
+        logger.info("📍 City-discriminative dimensions have been filtered from all embeddings!")
         logger.info("📈 Enhanced similarity search with reduced city bias!")
         logger.info("🗺️ UMAP coordinates computed from filtered Qdrant data!")
-        logger.info("📋 Update your frontend and backend to use the new filtered collections!")
+        logger.info("📍 Update your frontend and backend to use the new filtered collections!")
         logger.info("💡 All similarity searches will now have reduced city bias!")
         logger.info("📊 Pre-computed dimension analysis used for maximum efficiency!")
-        
         return 0
-        
     except Exception as e:
-        logger.error(f"❌ Upload failed: {e}")
+        logger.error(f"❌ Simplified script failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return 1
 
 

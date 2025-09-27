@@ -1028,7 +1028,7 @@ const UMapView = ({ locations, selectedLocations, cityFilteredLocations, onLocat
         <div className="umap-plot" ref={containerRef}>
           <div className="loading-state">
             <div className="spinner"></div>
-            <p>Computing UMAP embeddings...</p>
+            <p>Loading UMAP embeddings...</p>
           </div>
         </div>
         <ColorLegend continentColors={continentColors} className="umap-legend" />

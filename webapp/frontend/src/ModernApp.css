@@ -485,7 +485,7 @@ body {
 .main-container {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr 380px;
+  grid-template-columns: 1fr 1fr 0.75fr; /* Desktop main layout */ 
   grid-template-rows: 1fr;
   gap: 0; /* Remove all gaps */
   background: var(--bg-secondary);
@@ -862,7 +862,7 @@ body {
 /* Enhanced Similarity Grid */
 .similarity-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, 1fr); /* main grid control */
   gap: 8px;
   padding: 4px;
 }

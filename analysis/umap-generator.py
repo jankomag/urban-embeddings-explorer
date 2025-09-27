@@ -43,11 +43,10 @@ BACKUP_EXISTING = False
 DIMENSION_ANALYSIS_FILE = "outputs/spatial_correlation_results.json"
 
 # UMAP Parameters
-# UMAP Parameters: {'n_components': 6, 'n_neighbors': 7, 'min_dist': 1, 'metric': 'cosine', 'random_state': 42, 'n_epochs': 200}
 UMAP_PARAMS = {
-    'n_components': 6,
-    'n_neighbors': 7,      # Try: 15, 30, 50, 100 - Lower = more local structure, Higher = more global
-    'min_dist': 1,        # Try: 0.01, 0.1, 0.3, 0.5 - Lower = tighter clusters, Higher = more spread
+    'n_components': 2,
+    'n_neighbors': 100,      # Try: 15, 30, 50, 100 - Lower = more local structure, Higher = more global
+    'min_dist': 0.9,        # Try: 0.01, 0.1, 0.3, 0.5 - Lower = tighter clusters, Higher = more spread
     'metric': 'cosine',     # Try: 'euclidean', 'cosine', 'manhattan'
     'random_state': 42,     # Keep consistent for reproducible results
     'n_epochs': 500,        # Try: 200, 500, 1000 - More epochs = better convergence but slower

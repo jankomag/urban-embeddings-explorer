@@ -15,7 +15,7 @@ const ZOOM_CONFIG = {
 const PAGINATION_CONFIG = {
   INITIAL_DISPLAY: 6,     // Show 9 tiles initially (3x3 grid)
   BATCH_SIZE: 12,         // Load 18 tiles per batch (2x initial display)
-  MAX_TOTAL_RESULTS: 50, // Maximum total results to prevent infinite loading
+  MAX_TOTAL_RESULTS: 100, // Maximum total results to prevent infinite loading
   AUTO_REFETCH_THRESHOLD: 2, // If less than 3 tiles after filtering, auto-refetch more
   SMART_FETCH_MULTIPLIER: 2  // Fetch 3x more when we expect filtering
 };
@@ -47,25 +47,21 @@ function SimilarityPanel({
       name: "Mean", 
       description: "Standard aggregation" 
     },
-    'median': { 
-      name: "Median", 
-      description: "Robust to outliers" 
-    },
-    'min': { 
-      name: "Min", 
-      description: "Shared baseline features" 
-    },
-    'max': { 
-      name: "Max", 
-      description: "Distinctive features" 
-    },
+    // 'median': { 
+    //   name: "Median", 
+    //   description: "Robust to outliers" 
+    // },
+    // 'min': { 
+    //   name: "Min", 
+    //   description: "Shared baseline features" 
+    // },
+    // 'max': { 
+    //   name: "Max", 
+    //   description: "Distinctive features" 
+    // },
     'dominant_cluster': {
       name: "Dominant Cluster",
       description: "Unique characteristics"
-    },
-    'attention_weighted': {
-      name: "Attention Weighted",
-      description: "Unique attention"
     }
   });
   const [loadingMethods, setLoadingMethods] = useState(false);
@@ -90,19 +86,17 @@ function SimilarityPanel({
         const data = await response.json();
         
         const filteredMethods = {};
-        const availableKeys = ['mean', 'median', 'dominant_cluster', 'global_contrastive', 'attention_weighted'];
+        const availableKeys = ['mean', 'dominant_cluster'];
         
         for (const key of availableKeys) {
           if (data.available_methods[key]) {
             const shortNames = {
               'mean': { name: "Mean", description: "Standard aggregation" },
-              'median': { name: "Median", description: "Robust to outliers" },
+              // 'median': { name: "Median", description: "Robust to outliers" },
               // 'min': { name: "Min", description: "Shared baseline features" },
               // 'max': { name: "Max", description: "Distinctive features" },
               'dominant_cluster': { name: "Dominant Cluster", description: "Unique characteristics" },
-              'global_contrastive': { name: "Global Contrastive", description: "Unique blahblah" },
-              'attention_weighted': { name: "Attention Weighted", description: "Unique attention" }
-
+              // 'global_contrastive': { name: "Global Contrastive", description: "" },
             };
             filteredMethods[key] = shortNames[key] || data.available_methods[key];
           }

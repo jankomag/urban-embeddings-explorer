@@ -235,7 +235,7 @@ async def query_qdrant_similarity(
         
         # Search for results
         search_limit = max(500, (offset + limit) * 2)
-        
+    
         search_results = qdrant_client.search(
             collection_name=collection_name,
             query_vector=target_vector,
