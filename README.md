@@ -1,4 +1,4 @@
-# Urban Embeddings Explorer
+# Urban Embeddings Explorer 🌏🏙️🔎
 
 AI-powered satellite imagery analysis system for discovering visually similar urban areas worldwide using IBM TerraMind foundation model embeddings.
 

@@ -22,18 +22,6 @@ from models import (
     PaginationInfo, UMapPoint, BoundsStatistics
 )
 
-# Add security middleware
-# app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*.railway.app", "localhost"])
-# app.add_middleware(HTTPSRedirectMiddleware)
-
-# @app.middleware("http")
-# async def add_security_headers(request, call_next):
-#     response = await call_next(request)
-#     response.headers["X-Content-Type-Options"] = "nosniff"
-#     response.headers["X-Frame-Options"] = "DENY"
-#     response.headers["X-XSS-Protection"] = "1; mode=block"
-#     return response
-
 @lru_cache(maxsize=1000)
 def get_cached_similarity(location_id: int, method: str, limit: int):
     # Cache frequent queries in memory
@@ -41,9 +29,6 @@ def get_cached_similarity(location_id: int, method: str, limit: int):
 
 # Create rate limiter
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI()
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Load environment variables
 load_dotenv()
@@ -115,20 +100,48 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+# CREATE APP ONLY ONCE
 app = FastAPI(title="Satellite Embeddings Explorer", version="4.0.0")
 
+# Add rate limiter to app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Check if we're in production
+is_production = os.getenv("ENVIRONMENT") == "production" or os.getenv("RAILWAY_ENVIRONMENT") == "production"
+
+# Add security middleware (conditionally for production)
+if is_production:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*.railway.app", "your-domain.com"])
+    app.add_middleware(HTTPSRedirectMiddleware)
+
+# Security headers (always add these)
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    # Only add HTTPS headers in production
+    if is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    return response
+
 # Add CORS middleware
+cors_origins = [
+    "http://localhost:3000",
+    "https://urban-embeddings-explorer.vercel.app"
+]
+
+# Remove localhost in production
+if is_production:
+    cors_origins = [origin for origin in cors_origins if not origin.startswith("http://localhost")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://urban-embeddings-explorer.vercel.app",
-        "https://urban-embeddings-explorer-git-main-jankomags-projects.vercel.app",
-        "https://urban-embeddings-explorer-l4qazjkbk-jankomags-projects.vercel.app",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "https://localhost:3000"
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -143,12 +156,7 @@ qdrant_client = None
 # Qdrant collection names
 COLLECTIONS = {
     'mean': 'terramind_embeddings_mean',
-    'median': 'terramind_embeddings_median',
-    # 'min': 'satellite_embeddings_min_filtered_nonspatial',
-    # 'max': 'satellite_embeddings_max_filtered_nonspatial',
-    'dominant_cluster': 'terramind_embeddings_dominant_cluster',
-    'global_contrastive': 'terramind_embeddings_global_contrastive',
-    'attention_weighted': 'terramind_embeddings_attention_weighted'
+    'dominant_cluster': 'terramind_embeddings_dominant_cluster'
 }
 
 class SimilarityCache:
@@ -553,11 +561,11 @@ async def get_similarity_methods():
             "description": "Standard aggregation",
             "collection": COLLECTIONS["mean"]
         },
-        "median": {
-            "name": "Median", 
-            "description": "Robust to outliers",
-            "collection": COLLECTIONS["median"]
-        },
+        # "median": {
+        #     "name": "Median", 
+        #     "description": "Robust to outliers",
+        #     "collection": COLLECTIONS["median"]
+        # },
         # "min": {
         #     "name": "Min",
         #     "description": "Shared baseline features", 
@@ -577,11 +585,6 @@ async def get_similarity_methods():
             "name": "Global Contrastive",
             "description": "Unique minus mean",
             "collection": COLLECTIONS["global_contrastive"]
-        },
-        "attention_weighted": {
-            "name": "Attention Weighted",
-            "description": "Unique attention",
-            "collection": COLLECTIONS["attention_weighted"]
         }
     }
     
