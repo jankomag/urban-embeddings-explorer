@@ -1,6 +1,7 @@
 # Urban Embeddings Explorer 🌏🏙️🔎
 
 AI-powered satellite imagery analysis system for discovering visually similar urban areas worldwide using IBM TerraMind foundation model embeddings.
+Explore the live webapp: https://urban-embeddings-explorer.vercel.app/
 
 ## Overview
 
@@ -74,13 +75,6 @@ npm install && npm start        # Start React interface
 **Multiple Aggregation Methods:** Six different approaches for various similarity search modes
 **Interactive Interface:** Real-time similarity search with map and UMAP visualization
 **Global Coverage:** Processes urban areas from cities worldwide
-
-## Applications
-
-- Urban morphology comparison across global cities
-- Visual pattern discovery in satellite imagery
-- Comparative urban planning and policy research
-- Architecture and urban design analysis
 
 ## Requirements
 
