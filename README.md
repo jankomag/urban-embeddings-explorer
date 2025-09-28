@@ -1,6 +1,6 @@
 # Urban Embeddings Explorer 🌏🏙️🔎
 
-AI-powered satellite imagery analysis system for discovering visually similar urban areas worldwide using IBM TerraMind foundation model embeddings.
+AI-powered satellite imagery analysis system for discovering visually similar urban areas worldwide using IBM TerraMind foundation model embeddings. <br>
 Explore the live webapp: https://urban-embeddings-explorer.vercel.app/
 
 ## Overview
@@ -65,16 +65,16 @@ npm install && npm start        # Start React interface
 - Generates 768-dimensional embeddings from 224×224m satellite tiles
 - Processes 196 patches per tile through vision transformer architecture
 
-**Vector Database:** Qdrant for similarity search with three distinct aggregation methods
-**Visualization:** UMAP dimensionality reduction for interactive 2D exploration
-**Web Stack:** FastAPI backend with React frontend and Mapbox satellite imagery
+**Vector Database:** Qdrant for similarity search with three distinct aggregation methods <br>
+**Visualization:** UMAP dimensionality reduction for interactive 2D exploration <br>
+**Web Stack:** FastAPI backend with React frontend and Mapbox satellite imagery <br>
 
 ## Key Features
 
-**Spatial Bias Filtering:** Removes geographic location encoding to focus on visual similarity
-**Multiple Aggregation Methods:** Six different approaches for various similarity search modes
-**Interactive Interface:** Real-time similarity search with map and UMAP visualization
-**Global Coverage:** Processes urban areas from cities worldwide
+**Spatial Bias Filtering:** Removes geographic location encoding to focus on visual similarity <br>
+**Multiple Aggregation Methods:** Six different approaches for various similarity search modes <br>
+**Interactive Interface:** Real-time similarity search with map and UMAP visualization <br>
+**Global Coverage:** Processes urban areas from cities worldwide <br>
 
 ## Requirements
 
