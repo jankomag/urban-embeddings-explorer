@@ -38,7 +38,7 @@ MAX_TILES_PER_CITY = 200
 MIN_TILES_PER_CITY = 20
 EXCLUDED_FILES = []
 
-# Enhanced gradient sensitivity parameters
+# Gradient sensitivity parameters
 GRADIENT_SENSITIVITY = 0.1  # Lower = more sensitive to curve bends (0.5-1.5)
 MIN_EXCLUSION_PCT = 3.0     # Minimum 3% exclusion
 MAX_EXCLUSION_PCT = 10.0
