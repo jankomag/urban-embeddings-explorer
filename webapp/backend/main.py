@@ -103,6 +103,18 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # CREATE APP ONLY ONCE
 app = FastAPI(title="Satellite Embeddings Explorer", version="4.0.0", redirect_slashes=False)
 
+# Add this middleware to handle Railway's proxy setup
+@app.middleware("http")
+async def railway_proxy_middleware(request, call_next):
+    # Handle Railway's proxy headers
+    if "x-forwarded-proto" in request.headers:
+        request.scope["scheme"] = request.headers["x-forwarded-proto"]
+    if "x-forwarded-host" in request.headers:
+        request.scope["server"] = (request.headers["x-forwarded-host"], None)
+    
+    response = await call_next(request)
+    return response
+
 # Add rate limiter to app
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
