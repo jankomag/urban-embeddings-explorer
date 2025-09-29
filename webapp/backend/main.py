@@ -101,7 +101,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # CREATE APP ONLY ONCE
-app = FastAPI(title="Satellite Embeddings Explorer", version="4.0.0")
+app = FastAPI(title="Satellite Embeddings Explorer", version="4.0.0", redirect_slashes=False)
 
 # Add rate limiter to app
 app.state.limiter = limiter
