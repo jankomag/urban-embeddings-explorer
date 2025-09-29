@@ -103,7 +103,6 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # CREATE APP ONLY ONCE
 app = FastAPI(title="Satellite Embeddings Explorer", version="4.0.0", redirect_slashes=False)
 
-# Add this middleware to handle Railway's proxy setup
 @app.middleware("http")
 async def railway_proxy_middleware(request, call_next):
     # Handle Railway's proxy headers
@@ -111,6 +110,13 @@ async def railway_proxy_middleware(request, call_next):
         request.scope["scheme"] = request.headers["x-forwarded-proto"]
     if "x-forwarded-host" in request.headers:
         request.scope["server"] = (request.headers["x-forwarded-host"], None)
+    
+    # Prevent redirect loops by ensuring proper URL handling
+    if request.url.path.endswith('/') and len(request.url.path) > 1:
+        # Remove trailing slash for API endpoints
+        new_path = request.url.path.rstrip('/')
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(url=str(request.url.replace(path=new_path)), status_code=301)
     
     response = await call_next(request)
     return response
@@ -121,11 +127,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Check if we're in production
 is_production = os.getenv("ENVIRONMENT") == "production" or os.getenv("RAILWAY_ENVIRONMENT") == "production"
-
-# Add security middleware (conditionally for production)
-if is_production:
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*.railway.app", "your-domain.com"])
-    app.add_middleware(HTTPSRedirectMiddleware)
 
 # Security headers (always add these)
 @app.middleware("http")
