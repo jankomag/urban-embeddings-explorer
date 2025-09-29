@@ -11,8 +11,6 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 import logging
 import gzip
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from functools import lru_cache
 
 # Import simplified models
@@ -103,58 +101,18 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # CREATE APP ONLY ONCE
 app = FastAPI(title="Satellite Embeddings Explorer", version="4.0.0", redirect_slashes=False)
 
-@app.middleware("http")
-async def railway_proxy_middleware(request, call_next):
-    # Handle Railway's proxy headers
-    if "x-forwarded-proto" in request.headers:
-        request.scope["scheme"] = request.headers["x-forwarded-proto"]
-    if "x-forwarded-host" in request.headers:
-        request.scope["server"] = (request.headers["x-forwarded-host"], None)
-    
-    # Prevent redirect loops by ensuring proper URL handling
-    if request.url.path.endswith('/') and len(request.url.path) > 1:
-        # Remove trailing slash for API endpoints
-        new_path = request.url.path.rstrip('/')
-        from starlette.responses import RedirectResponse
-        return RedirectResponse(url=str(request.url.replace(path=new_path)), status_code=301)
-    
-    response = await call_next(request)
-    return response
-
 # Add rate limiter to app
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Check if we're in production
-is_production = os.getenv("ENVIRONMENT") == "production" or os.getenv("RAILWAY_ENVIRONMENT") == "production"
-
-# Security headers (always add these)
-@app.middleware("http")
-async def add_security_headers(request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    
-    # Only add HTTPS headers in production
-    if is_production:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    
-    return response
-
 # Add CORS middleware
-cors_origins = [
-    "http://localhost:3000",
-    "https://urban-embeddings-explorer.vercel.app"
-]
-
-# Remove localhost in production
-if is_production:
-    cors_origins = [origin for origin in cors_origins if not origin.startswith("http://localhost")]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://urban-embeddings-explorer.vercel.app",
+        "https://urban-embeddings-explorer-production.up.railway.app"
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
