@@ -550,11 +550,6 @@ async def get_similarity_methods():
             "name": "Dominant Cluster",
             "description": "Most frequent pattern",
             "collection": COLLECTIONS["dominant_cluster"]
-        },
-        "global_contrastive": {
-            "name": "Global Contrastive",
-            "description": "Unique minus mean",
-            "collection": COLLECTIONS["global_contrastive"]
         }
     }
     
