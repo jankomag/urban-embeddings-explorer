@@ -110,8 +110,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://urban-embeddings-explorer.vercel.app",
-        "https://urban-embeddings-explorer-production.up.railway.app"
+        "https://urban-embeddings-explorer.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
